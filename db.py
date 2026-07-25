@@ -35,22 +35,50 @@ LOCAL_SQLITE_PATH = os.path.join(os.path.dirname(__file__), "farmenager.db")
 _connection_lock = threading.Lock()
 
 
+_WRITE_OPS = ("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE")
+
+
 class _ConnectionHandle:
     """Cienki wrapper, dzięki któremu `with get_connection() as conn:` działa
-    dokładnie tak jak wcześniej z `sqlite3.Connection` (commit przy sukcesie,
-    bez zamykania współdzielonego połączenia)."""
+    dokładnie tak jak wcześniej z `sqlite3.Connection`.
+
+    Commit jest wywoływany w __exit__ **tylko** gdy w bloku wystąpiły operacje
+    zapisu (INSERT/UPDATE/DELETE/…). Odczyty (SELECT) nie generują zbędnego
+    commit() do Turso.
+    """
 
     def __init__(self, conn: Any) -> None:
         self._conn = conn
+        self._dirty = False
 
-    def __enter__(self) -> Any:
+    def __enter__(self) -> "Any":
         _connection_lock.acquire()
-        return self._conn
+        self._dirty = False
+        return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def execute(self, sql: str, parameters: Any = (), /) -> Any:
+        stripped = sql.strip().upper()
+        if any(stripped.startswith(op) for op in _WRITE_OPS):
+            self._dirty = True
+        return self._conn.execute(sql, parameters)
+
+    def commit(self) -> None:
+        """Jawny commit – od razu przesyła zapis do Turso."""
+        self._conn.commit()
+        self._dirty = False
+
+    def fetchone(self) -> Any:
+        return self._conn.fetchone()
+
+    def fetchall(self) -> Any:
+        return self._conn.fetchall()
+
+    def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> bool:
         try:
-            if exc_type is None:
+            if exc_type is None and self._dirty:
+                # Commituj tylko jeśli były zapisy i nie zrobiono tego jawnie
                 self._conn.commit()
+                self._dirty = False
         finally:
             _connection_lock.release()
         return False
