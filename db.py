@@ -15,6 +15,7 @@ Streamlit Community Cloud):
 """
 
 import os
+import sqlite3
 import threading
 from typing import Any
 
@@ -26,6 +27,7 @@ except ImportError:  # pragma: no cover - biblioteka może nie być jeszcze zain
     libsql = None
 
 LOCAL_REPLICA_PATH = os.path.join(os.path.dirname(__file__), "farmenager_replica.db")
+LOCAL_SQLITE_PATH = os.path.join(os.path.dirname(__file__), "farmenager.db")
 
 # libSQL/SQLite nie gwarantuje bezpiecznego dostępu z wielu wątków jednocześnie,
 # a Streamlit obsługuje równoległe sesje użytkowników we współdzielonym procesie.
@@ -54,37 +56,46 @@ class _ConnectionHandle:
         return False
 
 
-def _get_turso_secrets() -> dict[str, str]:
+def _looks_like_placeholder(value: str) -> bool:
+    normalized = str(value or "").strip().lower()
+    return any(
+        marker in normalized
+        for marker in ("twoja-baza", "xxxx.turso.io", "wklej-tutaj", "twoj-token", "replace")
+    )
+
+
+def _get_turso_secrets() -> dict[str, str] | None:
     turso_config = st.secrets.get("turso", {})
     url = str(turso_config.get("url") or "").strip()
     auth_token = str(turso_config.get("auth_token") or "").strip()
     if not url or not auth_token:
-        st.error(
-            "Brak konfiguracji Turso. Ustaw sekcję [turso] (url, auth_token) "
-            "w secrets.toml przed uruchomieniem aplikacji."
-        )
-        st.stop()
+        return None
+    if _looks_like_placeholder(url) or _looks_like_placeholder(auth_token):
+        return None
     return {"url": url, "auth_token": auth_token}
+
+
+def _connect_local_sqlite() -> Any:
+    return sqlite3.connect(LOCAL_SQLITE_PATH, check_same_thread=False)
 
 
 @st.cache_resource(show_spinner="Łączenie z bazą danych...")
 def _shared_connection() -> Any:
-    if libsql is None:
-        st.error(
-            "Brak biblioteki 'libsql'. Dodaj ją do requirements.txt "
-            "(pip install libsql) i zainstaluj ponownie zależności."
-        )
-        st.stop()
-
     secrets = _get_turso_secrets()
-    conn = libsql.connect(
-        LOCAL_REPLICA_PATH,
-        sync_url=secrets["url"],
-        auth_token=secrets["auth_token"],
-        sync_interval=30,
-    )
-    conn.sync()
-    return conn
+    if libsql is not None and secrets is not None:
+        try:
+            conn = libsql.connect(
+                LOCAL_REPLICA_PATH,
+                sync_url=secrets["url"],
+                auth_token=secrets["auth_token"],
+                sync_interval=30,
+            )
+            conn.sync()
+            return conn
+        except Exception as exc:
+            st.warning(f"Nie udało się połączyć z Turso ({exc}). Przełączono na lokalną bazę SQLite.")
+
+    return _connect_local_sqlite()
 
 
 def get_connection() -> _ConnectionHandle:

@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 import datetime as dt
+import os
 import re
 from pathlib import Path
 from typing import Any
@@ -29,18 +30,39 @@ def _to_plain_data(value: Any) -> Any:
     return value
 
 
-def _get_auth_config() -> dict[str, Any]:
-    if "auth" not in st.secrets:
-        st.error("Brak konfiguracji logowania. Ustaw sekcję [auth] w secrets.toml.")
-        st.stop()
+def _load_secrets_from_file() -> dict[str, Any]:
+    secrets_path = _get_secrets_file_path()
+    if not secrets_path.exists():
+        return {}
 
-    config = _to_plain_data(st.secrets["auth"])
+    try:
+        with secrets_path.open("r", encoding="utf-8") as handle:
+            parsed = toml.load(handle)
+    except Exception:
+        return {}
+
+    if not isinstance(parsed, dict):
+        return {}
+    return parsed
+
+
+def _get_auth_config() -> dict[str, Any]:
+    secrets = getattr(st, "secrets", None)
+    if isinstance(secrets, dict) and "auth" in secrets:
+        config = _to_plain_data(secrets["auth"])
+    else:
+        file_config = _load_secrets_from_file()
+        if isinstance(file_config, dict) and "auth" in file_config:
+            config = _to_plain_data(file_config["auth"])
+        else:
+            st.error("Brak konfiguracji logowania. Ustaw sekcję [auth] w secrets.toml.")
+            st.stop()
+
     if not isinstance(config, dict):
         st.error("Sekcja [auth] w secrets.toml ma nieprawidłowy format.")
         st.stop()
 
     cookie = config.get("cookie")
-
     if not isinstance(cookie, dict):
         st.error("Brak sekcji [auth.cookie] w secrets.toml.")
         st.stop()
