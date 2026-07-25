@@ -1,0 +1,7 @@
+streamlit>=1.36.0
+pandas>=2.2.0
+openpyxl>=3.0.0
+streamlit-authenticator>=0.4.1
+bcrypt>=4.0.0
+toml>=0.10.2
+libsql>=0.1.8

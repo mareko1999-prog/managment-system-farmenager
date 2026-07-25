@@ -1,0 +1,7 @@
+.streamlit/secrets.toml
+user_databases/
+farmenager_replica.db
+farmenager_replica.db-*
+auth_users.db
+__pycache__/
+.venv/
