@@ -195,10 +195,12 @@ def to_excel_bytes(df: pd.DataFrame) -> bytes:
 
 def ensure_column(table_name: str, column_name: str, column_def: str) -> None:
     with get_connection() as conn:
-        columns = [row[1] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()]
-        if column_name not in columns:
-            conn.execute(f"ALTER TABLE {table_name} ADD COLUMN {column_def}")
-            conn.commit()
+        try:
+            conn.execute(f'ALTER TABLE "{table_name}" ADD COLUMN {column_def}')
+        except Exception as exc:
+            err = str(exc).lower()
+            if "duplicate column" not in err and "already exists" not in err:
+                raise
 
 
 def init_db() -> None:
