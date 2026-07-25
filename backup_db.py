@@ -2,31 +2,25 @@
 """Cotygodniowy backup bazy Turso wysyłany mailem jako załącznik ZIP.
 
 Wymagane zmienne środowiskowe (ustawiaj jako GitHub Actions Secrets):
-    TURSO_URL          – adres libsql://... bazy Turso
-    TURSO_AUTH_TOKEN   – token autoryzacji Turso
-    SMTP_USER          – adres nadawcy Gmail (np. twoj@gmail.com)
-    SMTP_PASSWORD      – hasło aplikacji Gmail (App Password, nie zwykłe hasło)
+    TURSO_URL        – adres libsql://... bazy Turso
+    TURSO_AUTH_TOKEN – token autoryzacji Turso
+    RESEND_API_KEY   – klucz API z resend.com (darmowe konto)
 
 Opcjonalne:
-    RECIPIENT_EMAIL    – odbiorca (domyślnie marek.o.1999@gmail.com)
-    SMTP_HOST          – domyślnie smtp.gmail.com
-    SMTP_PORT          – domyślnie 587
+    RECIPIENT_EMAIL  – odbiorca (domyślnie marek.o.1999@gmail.com)
+    FROM_EMAIL       – nadawca (domyślnie onboarding@resend.dev)
 """
 
 import datetime
 import io
 import os
-import smtplib
 import zipfile
-from email.message import EmailMessage
 
 TURSO_URL = os.environ["TURSO_URL"]
 TURSO_AUTH_TOKEN = os.environ["TURSO_AUTH_TOKEN"]
-SMTP_HOST = os.environ.get("SMTP_HOST", "smtp.gmail.com")
-SMTP_PORT = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER = os.environ["SMTP_USER"]
-SMTP_PASSWORD = os.environ["SMTP_PASSWORD"]
+RESEND_API_KEY = os.environ["RESEND_API_KEY"]
 RECIPIENT_EMAIL = os.environ.get("RECIPIENT_EMAIL", "marek.o.1999@gmail.com")
+FROM_EMAIL = os.environ.get("FROM_EMAIL", "onboarding@resend.dev")
 
 REPLICA_PATH = "/tmp/farmenager_backup_replica.db"
 
@@ -48,32 +42,32 @@ def pull_and_zip() -> bytes:
 
 
 def send_email(zip_bytes: bytes) -> None:
-    """Wysyła ZIP jako załącznik na RECIPIENT_EMAIL przez SMTP."""
+    """Wysyła ZIP jako załącznik przez Resend API."""
+    import resend  # type: ignore
+
+    resend.api_key = RESEND_API_KEY
     today = datetime.date.today().isoformat()
 
-    msg = EmailMessage()
-    msg["From"] = SMTP_USER
-    msg["To"] = RECIPIENT_EMAIL
-    msg["Subject"] = f"Farmenager – backup bazy danych {today}"
-    msg.set_content(
-        f"Automatyczny cotygodniowy backup bazy danych Farmenager z dnia {today}.\n\n"
-        "Plik ZIP zawiera bazę SQLite ze wszystkimi danymi aplikacji.\n"
-        "Możesz otworzyć plik .db programem DB Browser for SQLite (https://sqlitebrowser.org/)."
-    )
-    msg.add_attachment(
-        zip_bytes,
-        maintype="application",
-        subtype="zip",
-        filename=f"farmenager_backup_{today}.zip",
-    )
+    params: resend.Emails.SendParams = {
+        "from": f"Farmenager Backup <{FROM_EMAIL}>",
+        "to": [RECIPIENT_EMAIL],
+        "subject": f"Farmenager – backup bazy danych {today}",
+        "text": (
+            f"Automatyczny cotygodniowy backup bazy danych Farmenager z dnia {today}.\n\n"
+            "Plik ZIP zawiera bazę SQLite ze wszystkimi danymi aplikacji.\n"
+            "Możesz otworzyć plik .db programem DB Browser for SQLite "
+            "(https://sqlitebrowser.org/)."
+        ),
+        "attachments": [
+            {
+                "filename": f"farmenager_backup_{today}.zip",
+                "content": list(zip_bytes),
+            }
+        ],
+    }
 
-    with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as smtp:
-        smtp.ehlo()
-        smtp.starttls()
-        smtp.login(SMTP_USER, SMTP_PASSWORD)
-        smtp.send_message(msg)
-
-    print(f"✓ Backup wysłany na {RECIPIENT_EMAIL} ({len(zip_bytes):,} bajtów)")
+    response = resend.Emails.send(params)
+    print(f"✓ Backup wysłany na {RECIPIENT_EMAIL} ({len(zip_bytes):,} bajtów) | id={response['id']}")
 
 
 if __name__ == "__main__":
