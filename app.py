@@ -356,9 +356,22 @@ def init_db() -> None:
     ensure_column('Nawozy', "cao_pct", "cao_pct REAL DEFAULT 0")
 
 
-def load_fields() -> pd.DataFrame:
+def _clear_data_cache() -> None:
+    """Invalidates per-user data caches after any write operation."""
+    load_fields.clear()
+    load_farms.clear()
+    load_seasons.clear()
+    load_crops.clear()
+    load_crop_assignments.clear()
+    load_plots.clear()
+    load_treatments.clear()
+    load_costs.clear()
+    load_product_catalog.clear()
+
+
+@st.cache_data(ttl=60, show_spinner=False)
+def load_fields(owner: str) -> pd.DataFrame:
     columns = ["id", "name", "area_ha", "notes"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT id, name, area_ha, notes FROM fields WHERE owner_username = ? ORDER BY name",
@@ -367,10 +380,9 @@ def load_fields() -> pd.DataFrame:
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
 
 
-
-def load_farms() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_farms(owner: str) -> pd.DataFrame:
     columns = ["id", "name", "notes"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT id, name, notes FROM farms WHERE owner_username = ? ORDER BY name",
@@ -379,9 +391,9 @@ def load_farms() -> pd.DataFrame:
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
 
 
-def load_seasons() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_seasons(owner: str) -> pd.DataFrame:
     columns = ["id", "name", "notes"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT id, name, notes FROM seasons WHERE owner_username = ? ORDER BY name",
@@ -390,9 +402,9 @@ def load_seasons() -> pd.DataFrame:
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
 
 
-def load_crops() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_crops(owner: str) -> pd.DataFrame:
     columns = ["id", "name", "notes"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             "SELECT id, name, notes FROM crops WHERE owner_username = ? ORDER BY name",
@@ -401,9 +413,9 @@ def load_crops() -> pd.DataFrame:
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
 
 
-def load_crop_assignments() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_crop_assignments(owner: str) -> pd.DataFrame:
     columns = ["id", "field_id", "season_id", "crop_id", "notes", "field_name", "season_name", "crop_name"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -601,6 +613,7 @@ def save_crop_assignment(field_id: int, season_id: int, crop_id: Optional[int], 
                     (owner, field_id, season_id, crop_id, notes),
                 )
         conn.commit()
+    _clear_data_cache()
 
 
 def build_crop_rotation_table(
@@ -684,9 +697,9 @@ def render_crop_rotation_progress_charts(
         st.divider()
 
 
-def load_plots() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_plots(owner: str) -> pd.DataFrame:
     columns = ["id", "farm_id", "field_id", "name", "area_ha", "notes", "farm_name", "field_name"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -710,7 +723,8 @@ def load_plots() -> pd.DataFrame:
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
 
 
-def load_treatments() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_treatments(owner: str) -> pd.DataFrame:
     columns = [
         "id",
         "field_id",
@@ -730,7 +744,6 @@ def load_treatments() -> pd.DataFrame:
         "field_area_ha",
         "notes",
     ]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -762,9 +775,9 @@ def load_treatments() -> pd.DataFrame:
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
 
 
-def load_costs() -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_costs(owner: str) -> pd.DataFrame:
     columns = ["id", "treatment_id", "cost_type", "amount_pln", "supplier", "invoice_no", "notes", "treatment_date", "treatment_type", "field_name"]
-    owner = _current_owner()
     with get_connection() as conn:
         rows = conn.execute(
             """
@@ -845,7 +858,7 @@ def build_fertilizer_nutrient_summary(report_df: pd.DataFrame, reference_area_ha
     if fertilizer_rows.empty:
         return pd.DataFrame()
 
-    nawozy_catalog = load_product_catalog("Nawozy")
+    nawozy_catalog = load_product_catalog("Nawozy", _current_owner())
     if nawozy_catalog.empty:
         return pd.DataFrame()
 
@@ -1041,10 +1054,10 @@ def build_treatment_registry_report(
     return report_df
 
 
-def load_product_catalog(table_name: str) -> pd.DataFrame:
+@st.cache_data(ttl=60, show_spinner=False)
+def load_product_catalog(table_name: str, owner: str) -> pd.DataFrame:
     base_columns = ["id", "name", "price_per_unit", "unit", "notes"]
     nawoz_columns = base_columns + ["n_pct", "p2o5_pct", "k2o_pct", "so3_pct", "cao_pct"]
-    owner = _current_owner()
     try:
         with get_connection() as conn:
             if table_name == "Nawozy":
@@ -1150,7 +1163,7 @@ def get_sor_product_notes(row: pd.Series) -> str:
 def sor_product_exists(name: str) -> bool:
     if not name:
         return False
-    df = load_product_catalog("ŚOR")
+    df = load_product_catalog("ŚOR", _current_owner())
     if df.empty or "name" not in df.columns:
         return False
     return not df[df["name"].astype(str).str.lower() == name.lower()].empty
@@ -1175,6 +1188,7 @@ def save_field(name: str, area_ha: float, notes: str) -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO fields (owner_username, name, area_ha, notes) VALUES (?, ?, ?, ?)", (owner, name, area_ha, notes))
         conn.commit()
+    _clear_data_cache()
 
 
 def save_farm(name: str, notes: str, owner_name: str = "") -> None:
@@ -1182,6 +1196,7 @@ def save_farm(name: str, notes: str, owner_name: str = "") -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO farms (owner_username, name, owner_name, notes) VALUES (?, ?, ?, ?)", (owner, name, owner_name, notes))
         conn.commit()
+    _clear_data_cache()
 
 
 def save_season(name: str, notes: str) -> None:
@@ -1189,6 +1204,7 @@ def save_season(name: str, notes: str) -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO seasons (owner_username, name, notes) VALUES (?, ?, ?)", (owner, name, notes))
         conn.commit()
+    _clear_data_cache()
 
 
 def update_season(season_id: int, name: str, notes: str) -> None:
@@ -1196,6 +1212,7 @@ def update_season(season_id: int, name: str, notes: str) -> None:
     with get_connection() as conn:
         conn.execute("UPDATE seasons SET name = ?, notes = ? WHERE id = ? AND owner_username = ?", (name, notes, season_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def delete_season(season_id: int) -> None:
@@ -1208,6 +1225,7 @@ def delete_season(season_id: int) -> None:
         )
         conn.execute("DELETE FROM seasons WHERE id = ? AND owner_username = ?", (season_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def save_crop(name: str, notes: str) -> None:
@@ -1215,6 +1233,7 @@ def save_crop(name: str, notes: str) -> None:
     with get_connection() as conn:
         conn.execute("INSERT INTO crops (owner_username, name, notes) VALUES (?, ?, ?)", (owner, name, notes))
         conn.commit()
+    _clear_data_cache()
 
 
 def update_crop(crop_id: int, name: str, notes: str) -> None:
@@ -1222,6 +1241,7 @@ def update_crop(crop_id: int, name: str, notes: str) -> None:
     with get_connection() as conn:
         conn.execute("UPDATE crops SET name = ?, notes = ? WHERE id = ? AND owner_username = ?", (name, notes, crop_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def delete_crop(crop_id: int) -> None:
@@ -1231,6 +1251,7 @@ def delete_crop(crop_id: int) -> None:
         conn.execute("DELETE FROM treatments WHERE crop_id = ? AND owner_username = ?", (crop_id, owner))
         conn.execute("DELETE FROM crops WHERE id = ? AND owner_username = ?", (crop_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def save_plot(farm_id: int, field_id: Optional[int], name: str, area_ha: float, notes: str) -> None:
@@ -1241,6 +1262,7 @@ def save_plot(farm_id: int, field_id: Optional[int], name: str, area_ha: float, 
             (owner, farm_id, field_id, name, area_ha, notes),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def update_field(field_id: int, name: str, area_ha: float, notes: str) -> None:
@@ -1251,6 +1273,7 @@ def update_field(field_id: int, name: str, area_ha: float, notes: str) -> None:
             (name, area_ha, notes, field_id, owner),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def update_farm(farm_id: int, name: str, notes: str, owner_name: str = "") -> None:
@@ -1261,6 +1284,7 @@ def update_farm(farm_id: int, name: str, notes: str, owner_name: str = "") -> No
             (name, owner_name, notes, farm_id, owner),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def update_plot(plot_id: int, farm_id: int, field_id: Optional[int], name: str, area_ha: float, notes: str) -> None:
@@ -1271,6 +1295,7 @@ def update_plot(plot_id: int, farm_id: int, field_id: Optional[int], name: str, 
             (farm_id, field_id, name, area_ha, notes, plot_id, owner),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def delete_field(field_id: int) -> None:
@@ -1284,6 +1309,7 @@ def delete_field(field_id: int) -> None:
         conn.execute("UPDATE plots SET field_id = NULL WHERE field_id = ? AND owner_username = ?", (field_id, owner))
         conn.execute("DELETE FROM fields WHERE id = ? AND owner_username = ?", (field_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def save_product(table_name: str, name: str, price_per_unit: float, unit: str, notes: str) -> None:
@@ -1294,6 +1320,7 @@ def save_product(table_name: str, name: str, price_per_unit: float, unit: str, n
             (owner, name, price_per_unit, unit, notes),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def save_nawoz_product(
@@ -1314,6 +1341,7 @@ def save_nawoz_product(
             (owner, name, price_per_unit, unit, notes, n_pct, p2o5_pct, k2o_pct, so3_pct, cao_pct),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def update_product(table_name: str, product_id: int, name: str, price_per_unit: float, unit: str, notes: str) -> None:
@@ -1324,6 +1352,7 @@ def update_product(table_name: str, product_id: int, name: str, price_per_unit: 
             (name, price_per_unit, unit, notes, product_id, owner),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def update_nawoz_product(
@@ -1345,6 +1374,7 @@ def update_nawoz_product(
             (name, price_per_unit, unit, notes, n_pct, p2o5_pct, k2o_pct, so3_pct, cao_pct, product_id, owner),
         )
         conn.commit()
+    _clear_data_cache()
 
 
 def delete_product(table_name: str, product_id: int) -> None:
@@ -1352,6 +1382,7 @@ def delete_product(table_name: str, product_id: int) -> None:
     with get_connection() as conn:
         conn.execute(f'DELETE FROM "{table_name}" WHERE id = ? AND owner_username = ?', (product_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def delete_farm(farm_id: int) -> None:
@@ -1360,6 +1391,7 @@ def delete_farm(farm_id: int) -> None:
         conn.execute("DELETE FROM plots WHERE farm_id = ? AND owner_username = ?", (farm_id, owner))
         conn.execute("DELETE FROM farms WHERE id = ? AND owner_username = ?", (farm_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def delete_plot(plot_id: int) -> None:
@@ -1367,6 +1399,7 @@ def delete_plot(plot_id: int) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM plots WHERE id = ? AND owner_username = ?", (plot_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def parse_dose_value(dose: str) -> float:
@@ -1513,6 +1546,7 @@ def delete_treatment(treatment_id: int) -> None:
         conn.execute("DELETE FROM costs WHERE treatment_id = ? AND owner_username = ?", (treatment_id, owner))
         conn.execute("DELETE FROM treatments WHERE id = ? AND owner_username = ?", (treatment_id, owner))
         conn.commit()
+    _clear_data_cache()
 
 
 def update_treatment(
@@ -1580,6 +1614,7 @@ def update_treatment(
                 ),
             )
         conn.commit()
+    _clear_data_cache()
 
 
 @st.cache_resource
@@ -1596,16 +1631,17 @@ def main() -> None:
     st.title("System ewidencji zabiegów agrotechnicznych")
     st.caption("Zarządzanie polami, gospodarstwami, działkami, zabiegami i kosztami")
 
-    fields_df = load_fields()
-    farms_df = load_farms()
-    seasons_df = load_seasons()
-    crops_df = load_crops()
-    crop_assignments_df = load_crop_assignments()
-    plots_df = load_plots()
-    treatments_df = load_treatments()
-    costs_df = load_costs()
+    _owner = _current_owner()
+    fields_df = load_fields(_owner)
+    farms_df = load_farms(_owner)
+    seasons_df = load_seasons(_owner)
+    crops_df = load_crops(_owner)
+    crop_assignments_df = load_crop_assignments(_owner)
+    plots_df = load_plots(_owner)
+    treatments_df = load_treatments(_owner)
+    costs_df = load_costs(_owner)
 
-    product_catalogs = {table_name: load_product_catalog(table_name) for table_name in PRODUCT_TABLES}
+    product_catalogs = {table_name: load_product_catalog(table_name, _owner) for table_name in PRODUCT_TABLES}
 
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Liczba pól", len(fields_df))
@@ -1930,7 +1966,7 @@ def main() -> None:
                         st.warning("Podaj nazwę uprawy")
 
             st.subheader("Lista upraw")
-            crops_df = load_crops()
+            crops_df = load_crops(_current_owner())
             if crops_df.empty:
                 st.info("Brak upraw do wyświetlenia")
             else:
@@ -2182,7 +2218,7 @@ def main() -> None:
                                 else:
                                     product_row["category"] = category
                             with col2:
-                                product_catalog = load_product_catalog(product_row["category"])
+                                product_catalog = load_product_catalog(product_row["category"], _current_owner())
                                 if not product_catalog.empty:
                                     product_names = list(product_catalog["name"])
                                     current_product = product_row.get("product_name") or ""
@@ -2400,7 +2436,7 @@ def main() -> None:
                             product_row["category"] = category
 
                     with col2:
-                        product_catalog = load_product_catalog(product_row["category"])
+                        product_catalog = load_product_catalog(product_row["category"], _current_owner())
                         if not product_catalog.empty:
                             product_names = list(product_catalog["name"])
                             current_product = product_row.get("product_name") or ""
@@ -2564,7 +2600,7 @@ def main() -> None:
                     else:
                         st.warning("Podaj nazwę produktu")
 
-            catalog_df = load_product_catalog(selected_category)
+            catalog_df = load_product_catalog(selected_category, _current_owner())
             if catalog_df.empty:
                 st.info("Brak produktów w tej kategorii")
             else:
