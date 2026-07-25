@@ -1582,11 +1582,16 @@ def update_treatment(
         conn.commit()
 
 
+@st.cache_resource
+def _init_db_once() -> None:
+    init_db()
+
+
 def main() -> None:
     st.set_page_config(page_title="Farmenager", page_icon="🌾", layout="wide")
     require_authentication()
     show_password_change_form()
-    init_db()
+    _init_db_once()
 
     st.title("System ewidencji zabiegów agrotechnicznych")
     st.caption("Zarządzanie polami, gospodarstwami, działkami, zabiegami i kosztami")

@@ -88,7 +88,7 @@ def _shared_connection() -> Any:
                 LOCAL_REPLICA_PATH,
                 sync_url=secrets["url"],
                 auth_token=secrets["auth_token"],
-                sync_interval=30,
+                sync_interval=300,
             )
             conn.sync()
             return conn
