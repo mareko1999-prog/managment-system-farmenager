@@ -1,5 +1,5 @@
 import streamlit as st
-import libsql_experimental as libsql
+import libsql
 import time
 import os
 
