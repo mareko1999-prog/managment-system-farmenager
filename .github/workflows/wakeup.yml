@@ -9,4 +9,4 @@ jobs:
     steps:
       - name: Ping application
         run: |
-          curl -I https://https://farmenager.streamlit.app/
+          curl -I https://farmenager.streamlit.app/
