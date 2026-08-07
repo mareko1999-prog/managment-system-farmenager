@@ -22,7 +22,7 @@ FAILED_LOGIN_LOCK_UNTIL_KEY = "auth_failed_login_lock_until"
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCK_SECONDS = 300
 DEFAULT_INACTIVITY_MINUTES = 60.0
-INACTIVITY_TIMEOUT_MINUTES = 15.0
+INACTIVITY_TIMEOUT_MINUTES = 10000.0
 
 
 def _to_plain_data(value: Any) -> Any:
@@ -81,8 +81,8 @@ def _get_auth_config() -> dict[str, Any]:
     return config
 
 
-def _get_inactivity_timeout_minutes(config: dict[str, Any] | None = None) -> float:
-    return INACTIVITY_TIMEOUT_MINUTES
+def _get_cookie_expiry_days(config: dict[str, Any] | None = None) -> float:
+    return INACTIVITY_TIMEOUT_MINUTES / 1440.0
 
 
 def _ensure_auth_store() -> None:
@@ -333,7 +333,6 @@ def show_registration_form() -> None:
 
 def require_authentication() -> None:
     config = _get_auth_config()
-    inactivity_timeout_minutes = _get_inactivity_timeout_minutes(config)
 
     lock_until = float(st.session_state.get(FAILED_LOGIN_LOCK_UNTIL_KEY) or 0.0)
     now_ts = dt.datetime.utcnow().timestamp()
@@ -341,15 +340,6 @@ def require_authentication() -> None:
         remaining_seconds = int(lock_until - now_ts)
         st.error(f"Zbyt wiele nieudanych prób logowania. Spróbuj ponownie za {remaining_seconds} s.")
         st.stop()
-
-    now_ts = dt.datetime.utcnow().timestamp()
-    last_activity_ts = float(st.session_state.get(SESSION_AUTH_LAST_ACTIVITY_KEY) or 0.0)
-    if last_activity_ts and last_activity_ts + inactivity_timeout_minutes * 60.0 <= now_ts:
-        st.session_state[SESSION_AUTH_STATUS] = None
-        st.session_state[SESSION_AUTH_NAME] = None
-        st.session_state[SESSION_AUTH_USERNAME] = None
-        st.session_state[SESSION_AUTH_LAST_ACTIVITY_KEY] = now_ts
-        st.warning(f"Sesja wygasła po {int(inactivity_timeout_minutes)} minutach bezczynności.")
 
     credentials = _build_authenticator_credentials()
     cookie = config["cookie"]
@@ -359,7 +349,7 @@ def require_authentication() -> None:
         credentials,
         str(cookie.get("name", "farmenager_auth")),
         str(cookie.get("key")),
-        float(cookie.get("expiry_days", 30.0)),
+        _get_cookie_expiry_days(config),
         preauthorized,
     )
 
@@ -367,13 +357,11 @@ def require_authentication() -> None:
     try:
         login_result = authenticator.login(location="main", key="login_form")
     except TypeError:
-        # Backward-compatible call for older streamlit-authenticator signatures.
         login_result = authenticator.login("Logowanie", "main")
 
     auth_status = st.session_state.get(SESSION_AUTH_STATUS)
     name = st.session_state.get(SESSION_AUTH_NAME)
     username = st.session_state.get(SESSION_AUTH_USERNAME)
-    st.session_state[SESSION_AUTH_LAST_ACTIVITY_KEY] = now_ts
 
     if isinstance(login_result, tuple) and len(login_result) >= 2:
         tuple_name = login_result[0] if len(login_result) >= 1 else None
