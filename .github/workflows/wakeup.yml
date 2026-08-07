@@ -1,0 +1,12 @@
+name: Wake Streamlit App
+on:
+  schedule:
+    - cron: "0 */4 * * *"
+  workflow_dispatch:
+jobs:
+  wake-up:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping application
+        run: |
+          curl -I https://https://farmenager.streamlit.app/
