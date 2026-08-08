@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import bcrypt
+import jwt
 import streamlit as st
 import streamlit_authenticator as stauth
 import toml
@@ -24,6 +25,15 @@ MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCK_SECONDS = 300
 DEFAULT_INACTIVITY_MINUTES = 60.0
 INACTIVITY_TIMEOUT_MINUTES = 10000.0
+
+# Nazwa parametru w URL przechowującego podpisany token re-autentykacji.
+# Streamlit Community Cloud serwuje aplikację przez proxy + zagnieżdżony iframe,
+# który NIE przekazuje do backendu niestandardowego ciasteczka ustawianego przez
+# komponent CookieManager (potwierdzone: ciasteczko jest w przeglądarce, ale
+# `st.context.cookies` go nigdy nie widzi). Parametry URL (`st.query_params`) są
+# natomiast częścią protokołu samego Streamlita i przetrwają odświeżenie strony
+# (F5) niezależnie od tego proxy, więc służą jako główny mechanizm sesji.
+SESSION_TOKEN_QUERY_PARAM = "auth_token"
 
 
 def _to_plain_data(value: Any) -> Any:
@@ -84,6 +94,26 @@ def _get_auth_config() -> dict[str, Any]:
 
 def _get_cookie_expiry_days(config: dict[str, Any] | None = None) -> float:
     return INACTIVITY_TIMEOUT_MINUTES / 1440.0
+
+
+def _encode_session_token(username: str, secret_key: str, expiry_days: float) -> str:
+    """Tworzy podpisany token re-autentykacji do przechowania w URL (query params)."""
+    exp_date = (dt.datetime.now() + dt.timedelta(days=expiry_days)).timestamp()
+    return jwt.encode({"username": username, "exp_date": exp_date}, secret_key, algorithm="HS256")
+
+
+def _decode_session_token(token: str, secret_key: str) -> dict[str, Any] | None:
+    """Dekoduje i waliduje token re-autentykacji z URL. Zwraca None jeśli jest
+    nieprawidłowy, sfałszowany lub wygasł."""
+    try:
+        payload = jwt.decode(token, secret_key, algorithms=["HS256"])
+    except jwt.PyJWTError:
+        return None
+    if not isinstance(payload, dict) or "username" not in payload or "exp_date" not in payload:
+        return None
+    if float(payload["exp_date"]) <= dt.datetime.now().timestamp():
+        return None
+    return payload
 
 
 def _ensure_auth_store() -> None:
@@ -346,6 +376,23 @@ def require_authentication() -> None:
     credentials = _build_authenticator_credentials()
     cookie = config["cookie"]
     preauthorized = config.get("preauthorized")
+    secret_key = str(cookie.get("key"))
+
+    # Odtworzenie sesji z tokenu w URL (patrz komentarz przy SESSION_TOKEN_QUERY_PARAM).
+    # Robimy to PRZED odczytaniem `was_authenticated`, aby przywrócona w ten sposób
+    # sesja nie była traktowana jak świeże logowanie.
+    if st.session_state.get(SESSION_AUTH_STATUS) is not True:
+        token = st.query_params.get(SESSION_TOKEN_QUERY_PARAM)
+        if token:
+            payload = _decode_session_token(token, secret_key)
+            token_username = payload.get("username") if payload else None
+            user_record = credentials["usernames"].get(token_username) if token_username else None
+            if payload and user_record:
+                st.session_state[SESSION_AUTH_STATUS] = True
+                st.session_state[SESSION_AUTH_USERNAME] = token_username
+                st.session_state[SESSION_AUTH_NAME] = user_record.get("name", token_username)
+            else:
+                del st.query_params[SESSION_TOKEN_QUERY_PARAM]
 
     was_authenticated = st.session_state.get(SESSION_AUTH_STATUS) is True
 
@@ -395,12 +442,18 @@ def require_authentication() -> None:
         st.stop()
 
     if auth_status is True and not was_authenticated:
-        # Ciasteczko re-autentykacji jest zapisywane w przeglądarce asynchronicznie
-        # przez ukryty komponent JS (CookieManager). To zajmuje chwilę – jeśli
-        # użytkownik odświeży stronę (F5) natychmiast po zalogowaniu, ciasteczko
-        # może jeszcze nie istnieć w przeglądarce i sesja zostanie utracona.
-        # Krótka pauza (bez rerun, żeby nie przerywać zapisu ciasteczka w trakcie)
-        # daje komponentowi czas na dokończenie zapisu.
+        # Zapisz token re-autentykacji w URL (query params) - to główny mechanizm
+        # utrzymania sesji, działający niezależnie od tego, czy hosting przekazuje
+        # do aplikacji niestandardowe ciasteczka (Streamlit Community Cloud tego
+        # nie robi - patrz komentarz przy SESSION_TOKEN_QUERY_PARAM).
+        st.query_params[SESSION_TOKEN_QUERY_PARAM] = _encode_session_token(
+            str(username), secret_key, _get_cookie_expiry_days(config)
+        )
+        # Ciasteczko re-autentykacji (mechanizm zapasowy, przydatny np. przy
+        # samodzielnym hostowaniu) jest zapisywane w przeglądarce asynchronicznie
+        # przez ukryty komponent JS (CookieManager). To zajmuje chwilę – krótka
+        # pauza (bez rerun, żeby nie przerywać zapisu w trakcie) daje komponentowi
+        # czas na dokończenie zapisu.
         time.sleep(1.5)
 
     display_name = str(name or username or "Użytkownik")
@@ -413,6 +466,9 @@ def require_authentication() -> None:
         authenticator.logout("Wyloguj", location="sidebar", key="logout_button")
     except TypeError:
         authenticator.logout("Wyloguj", "sidebar")
+
+    if st.session_state.get(SESSION_AUTH_STATUS) is not True and SESSION_TOKEN_QUERY_PARAM in st.query_params:
+        del st.query_params[SESSION_TOKEN_QUERY_PARAM]
 
 
 def _get_secrets_file_path() -> Path:
