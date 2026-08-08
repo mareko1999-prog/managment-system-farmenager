@@ -346,6 +346,8 @@ def require_authentication() -> None:
     cookie = config["cookie"]
     preauthorized = config.get("preauthorized")
 
+    was_authenticated = st.session_state.get(SESSION_AUTH_STATUS) is True
+
     authenticator = stauth.Authenticate(
         credentials,
         str(cookie.get("name", "farmenager_auth")),
@@ -390,6 +392,14 @@ def require_authentication() -> None:
         st.warning("Zaloguj się, aby korzystać z aplikacji.")
         show_registration_form()
         st.stop()
+
+    if auth_status is True and not was_authenticated:
+        # Ciasteczko re-autentykacji jest zapisywane w przeglądarce asynchronicznie
+        # przez komponent JS. Bez dodatkowego przebiegu skryptu (rerun) ciasteczko
+        # może nie zdążyć się zapisać, przez co odświeżenie strony (F5) tuż po
+        # zalogowaniu wylogowuje użytkownika. Ten rerun wykonuje się tylko raz,
+        # zaraz po przejściu ze stanu niezalogowanego na zalogowany.
+        st.rerun()
 
     display_name = str(name or username or "Użytkownik")
     st.sidebar.success(f"Zalogowano: {display_name}")
