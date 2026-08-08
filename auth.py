@@ -349,13 +349,6 @@ def require_authentication() -> None:
 
     was_authenticated = st.session_state.get(SESSION_AUTH_STATUS) is True
 
-    # TYMCZASOWY DEBUG - do usunięcia po diagnozie problemu z ciasteczkiem.
-    if os.environ.get("AUTH_COOKIE_DEBUG") or True:
-        try:
-            st.write("DEBUG st.context.cookies:", dict(st.context.cookies))
-        except Exception as debug_exc:  # noqa: BLE001
-            st.write("DEBUG st.context.cookies error:", repr(debug_exc))
-
     authenticator = stauth.Authenticate(
         credentials,
         str(cookie.get("name", "farmenager_auth")),
