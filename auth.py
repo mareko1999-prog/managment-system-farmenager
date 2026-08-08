@@ -51,7 +51,7 @@ def _load_secrets_from_file() -> dict[str, Any]:
 
 def _get_auth_config() -> dict[str, Any]:
     secrets = getattr(st, "secrets", None)
-    if isinstance(secrets, dict) and "auth" in secrets:
+    if isinstance(secrets, Mapping) and "auth" in secrets:
         config = _to_plain_data(secrets["auth"])
     else:
         file_config = _load_secrets_from_file()
