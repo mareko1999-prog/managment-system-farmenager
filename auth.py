@@ -333,6 +333,7 @@ def show_registration_form() -> None:
 
 def require_authentication() -> None:
     config = _get_auth_config()
+    st.session_state["logout"] = False
 
     lock_until = float(st.session_state.get(FAILED_LOGIN_LOCK_UNTIL_KEY) or 0.0)
     now_ts = dt.datetime.utcnow().timestamp()
@@ -392,6 +393,7 @@ def require_authentication() -> None:
 
     display_name = str(name or username or "Użytkownik")
     st.sidebar.success(f"Zalogowano: {display_name}")
+    st.session_state["logout"] = False
     st.session_state[FAILED_LOGIN_ATTEMPTS_KEY] = 0
     st.session_state[FAILED_LOGIN_LOCK_UNTIL_KEY] = 0.0
 
