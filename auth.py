@@ -2,6 +2,7 @@ from collections.abc import Mapping
 import datetime as dt
 import os
 import re
+import time
 from pathlib import Path
 from typing import Any
 
@@ -395,11 +396,12 @@ def require_authentication() -> None:
 
     if auth_status is True and not was_authenticated:
         # Ciasteczko re-autentykacji jest zapisywane w przeglądarce asynchronicznie
-        # przez komponent JS. Bez dodatkowego przebiegu skryptu (rerun) ciasteczko
-        # może nie zdążyć się zapisać, przez co odświeżenie strony (F5) tuż po
-        # zalogowaniu wylogowuje użytkownika. Ten rerun wykonuje się tylko raz,
-        # zaraz po przejściu ze stanu niezalogowanego na zalogowany.
-        st.rerun()
+        # przez ukryty komponent JS (CookieManager). To zajmuje chwilę – jeśli
+        # użytkownik odświeży stronę (F5) natychmiast po zalogowaniu, ciasteczko
+        # może jeszcze nie istnieć w przeglądarce i sesja zostanie utracona.
+        # Krótka pauza (bez rerun, żeby nie przerywać zapisu ciasteczka w trakcie)
+        # daje komponentowi czas na dokończenie zapisu.
+        time.sleep(1.5)
 
     display_name = str(name or username or "Użytkownik")
     st.sidebar.success(f"Zalogowano: {display_name}")
