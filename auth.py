@@ -24,7 +24,7 @@ FAILED_LOGIN_LOCK_UNTIL_KEY = "auth_failed_login_lock_until"
 MAX_LOGIN_ATTEMPTS = 5
 LOGIN_LOCK_SECONDS = 300
 DEFAULT_INACTIVITY_MINUTES = 60.0
-INACTIVITY_TIMEOUT_MINUTES = 10000.0
+INACTIVITY_TIMEOUT_MINUTES = 720.0
 
 # Nazwa parametru w URL przechowującego podpisany token re-autentykacji.
 # Streamlit Community Cloud serwuje aplikację przez proxy + zagnieżdżony iframe,
