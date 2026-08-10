@@ -1,12 +1,39 @@
-name: Wake Streamlit App
+name: Wake Streamlit App (Browser)
 on:
   schedule:
-    - cron: "0 */4 * * *"
+    - cron: "0 */10 * * *" # Uruchamia się co 10 godzin
   workflow_dispatch:
 jobs:
   wake-up:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping application
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          
+      - name: Install dependencies
         run: |
-          curl -I https://farmenager.streamlit.app/
+          pip install playwright
+          playwright install chromium
+          
+      - name: Visit app with headless browser
+        run: |
+          python -c "
+          from playwright.sync_api import sync_playwright
+          import time
+          
+          print('Otwieranie przeglądarki...')
+          with sync_playwright() as p:
+              browser = p.chromium.launch()
+              page = browser.new_page()
+              
+              print('Łączenie z aplikacją...')
+              page.goto('https://farmenager.streamlit.app/')
+              
+              # Kluczowy moment: czekamy 10 sekund, aby JavaScript nawiązał połączenie WebSocket
+              time.sleep(10)
+              
+              print('Sukces. Zamykanie przeglądarki.')
+              browser.close()
+          "
