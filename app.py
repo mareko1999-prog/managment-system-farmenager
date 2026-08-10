@@ -2499,18 +2499,160 @@ def main() -> None:
             else:
                 st.caption("Dodaj przynajmniej jedno pole, aby zobaczyć przypisaną uprawę.")
 
+            @st.dialog("Wybierz produkt do zabiegu", width="large")
+            def open_treatment_product_picker_dialog() -> None:
+                product_rows = []
+                owner_username = _current_owner()
+                for category_name in PRODUCT_TABLES:
+                    category_catalog = load_product_catalog(category_name, owner_username)
+                    if category_catalog.empty:
+                        continue
+                    for _, product in category_catalog.iterrows():
+                        product_name = str(product.get("name") or "").strip()
+                        if not product_name:
+                            continue
+                        unit_value = str(product.get("unit") or "")
+                        notes_value = str(product.get("notes") or "")
+                        product_rows.append(
+                            {
+                                "product_key": f"{category_name}::{product_name}",
+                                "nazwa": product_name,
+                                "kategoria": category_name,
+                                "jednostka": unit_value,
+                                "notatki": notes_value,
+                                "price_per_unit": float(product.get("price_per_unit") or 0.0),
+                            }
+                        )
+
+                if not product_rows:
+                    st.info("Brak produktów w katalogach")
+                    return
+
+                if "treatment_product_picker_category_filter" not in st.session_state:
+                    st.session_state.treatment_product_picker_category_filter = "ALL"
+                if "treatment_product_picker_selected_key" not in st.session_state:
+                    st.session_state.treatment_product_picker_selected_key = None
+
+                category_filter_cols = st.columns(len(PRODUCT_TABLES))
+                current_category_filter = str(st.session_state.get("treatment_product_picker_category_filter") or "ALL")
+                for idx, category_name in enumerate(PRODUCT_TABLES):
+                    is_active_filter = current_category_filter == category_name
+                    filter_button_label = f"● {category_name}" if is_active_filter else category_name
+                    if category_filter_cols[idx].button(
+                        filter_button_label,
+                        key=f"treatment_product_filter_{category_name}",
+                        use_container_width=True,
+                    ):
+                        st.session_state.treatment_product_picker_category_filter = (
+                            "ALL" if is_active_filter else category_name
+                        )
+                        st.rerun()
+
+                active_filter = str(st.session_state.get("treatment_product_picker_category_filter") or "ALL")
+                if active_filter == "ALL":
+                    st.caption("Filtr kategorii: wszystkie")
+                else:
+                    st.caption(f"Filtr kategorii: {active_filter}")
+
+                if st_keyup is not None:
+                    search_query = st_keyup(
+                        "Wyszukaj produkt (nazwa + notatki)",
+                        value=st.session_state.get("treatment_product_picker_search", ""),
+                        key="treatment_product_picker_search",
+                        placeholder="Wpisz fragment nazwy lub notatki...",
+                        debounce=0,
+                    )
+                else:
+                    search_query = st.text_input(
+                        "Wyszukaj produkt (nazwa + notatki)",
+                        value=st.session_state.get("treatment_product_picker_search", ""),
+                        key="treatment_product_picker_search",
+                        placeholder="Wpisz fragment nazwy lub notatki...",
+                    )
+                    st.caption("Live search po każdym znaku wymaga pakietu streamlit-keyup.")
+
+                all_products_df = pd.DataFrame(product_rows)
+                picker_products_df = all_products_df.copy()
+                if active_filter != "ALL":
+                    picker_products_df = picker_products_df[
+                        picker_products_df["kategoria"] == active_filter
+                    ]
+
+                if search_query:
+                    search_value = str(search_query)
+                    picker_products_df = picker_products_df[
+                        picker_products_df["nazwa"].str.contains(search_value, case=False, na=False)
+                        | picker_products_df["notatki"].str.contains(search_value, case=False, na=False)
+                    ]
+
+                current_selected_product_key = st.session_state.get("treatment_product_picker_selected_key")
+                picker_products_df = picker_products_df.sort_values(by=["nazwa", "kategoria"], kind="stable").reset_index(drop=True)
+                picker_products_df["wybrano"] = picker_products_df["product_key"] == current_selected_product_key
+
+                edited_products_df = st.data_editor(
+                    picker_products_df[["product_key", "wybrano", "nazwa", "kategoria", "jednostka", "notatki"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["product_key", "nazwa", "kategoria", "jednostka", "notatki"],
+                    column_config={
+                        "product_key": None,
+                        "wybrano": st.column_config.CheckboxColumn("Wybór"),
+                        "nazwa": st.column_config.TextColumn("Nazwa"),
+                        "kategoria": st.column_config.TextColumn("Kategoria"),
+                        "jednostka": st.column_config.TextColumn("Jednostka"),
+                        "notatki": st.column_config.TextColumn("Notatki"),
+                    },
+                    key="treatment_product_picker_table",
+                )
+
+                checked_product_keys = edited_products_df.loc[
+                    edited_products_df["wybrano"], "product_key"
+                ].tolist()
+                visible_product_keys = set(edited_products_df["product_key"].tolist())
+                if checked_product_keys:
+                    st.session_state.treatment_product_picker_selected_key = str(checked_product_keys[-1])
+                elif current_selected_product_key in visible_product_keys:
+                    st.session_state.treatment_product_picker_selected_key = None
+
+                selected_product_key = st.session_state.get("treatment_product_picker_selected_key")
+                selected_product_row = None
+                if selected_product_key:
+                    selected_matches = all_products_df[all_products_df["product_key"] == str(selected_product_key)]
+                    if not selected_matches.empty:
+                        selected_product_row = selected_matches.iloc[0]
+
+                if selected_product_row is not None:
+                    st.caption(
+                        f"Wybrano: {selected_product_row['nazwa']} ({selected_product_row['kategoria']}, {selected_product_row['jednostka']})"
+                    )
+                else:
+                    st.caption("Wybierz produkt z tabeli")
+
+                product_picker_action_cols = st.columns([1, 1])
+                with product_picker_action_cols[0]:
+                    if st.button("Dodaj wybrany produkt", key="add_selected_treatment_product", use_container_width=True):
+                        if selected_product_row is None:
+                            st.warning("Wybierz produkt, który chcesz dodać")
+                        else:
+                            st.session_state.treatment_products.append(
+                                {
+                                    "category": str(selected_product_row["kategoria"]),
+                                    "product_name": str(selected_product_row["nazwa"]),
+                                    "price_per_unit": float(selected_product_row["price_per_unit"]),
+                                    "unit": str(selected_product_row["jednostka"]),
+                                    "dose": 0.0,
+                                    "area_ha": total_selected_area,
+                                }
+                            )
+                            st.rerun()
+                with product_picker_action_cols[1]:
+                    if st.button("Anuluj", key="cancel_treatment_product_picker", use_container_width=True):
+                        st.rerun()
+
             product_action_cols = st.columns([1, 1])
             with product_action_cols[0]:
                 if st.button("Dodaj produkt", key="add_treatment_product", use_container_width=True):
-                    st.session_state.treatment_products.append({
-                        "category": PRODUCT_TABLES[0],
-                        "product_name": "",
-                        "price_per_unit": 0.0,
-                        "unit": "",
-                        "dose": 0.0,
-                        "area_ha": total_selected_area,
-                    })
-                    st.rerun()
+                    open_treatment_product_picker_dialog()
             with product_action_cols[1]:
                 if st.button("Usuń", key="remove_last_treatment_product", use_container_width=True, disabled=not st.session_state.treatment_products):
                     if st.session_state.treatment_products:
