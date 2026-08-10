@@ -2301,18 +2301,109 @@ def main() -> None:
                 season_id = None
                 treatment_type = ""
 
-            field_options = {str(row["name"]): int(row["id"]) for _, row in fields_df.iterrows()}
-            available_field_names = [name for name in field_options.keys() if field_options[name] not in st.session_state.treatment_selected_fields]
-            if field_options:
-                selected_field_name = st.selectbox("Pole", options=available_field_names, key="treatment_field") if available_field_names else ""
-                if st.button("Dodaj kolejne pole", key="add_treatment_field"):
-                    if selected_field_name:
-                        selected_field_id = field_options[selected_field_name]
-                        if selected_field_id not in st.session_state.treatment_selected_fields:
-                            st.session_state.treatment_selected_fields.append(selected_field_id)
+            @st.dialog("Wybierz pola do zabiegu", width="large")
+            def open_treatment_field_picker_dialog() -> None:
+                if fields_df.empty:
+                    st.info("Najpierw dodaj pole")
+                    return
+
+                search_query = st.text_input(
+                    "Wyszukaj pole po nazwie",
+                    value=st.session_state.get("treatment_field_picker_search", ""),
+                    key="treatment_field_picker_search",
+                    placeholder="Wpisz nazwę pola...",
+                )
+
+                sort_cols = st.columns([1, 1])
+                with sort_cols[0]:
+                    sort_by = st.selectbox(
+                        "Sortuj po",
+                        options=["Nazwa pola", "Uprawa"],
+                        key="treatment_field_picker_sort_by",
+                    )
+                with sort_cols[1]:
+                    sort_direction = st.selectbox(
+                        "Kierunek",
+                        options=["Rosnąco", "Malejąco"],
+                        key="treatment_field_picker_sort_direction",
+                    )
+
+                picker_rows = []
+                for _, field in fields_df.iterrows():
+                    field_id = int(field["id"])
+                    assignment = get_crop_assignment(field_id, int(season_id))
+                    crop_name = ""
+                    if assignment:
+                        crop_name = str(assignment.get("crop_name") or "")
+
+                    picker_rows.append(
+                        {
+                            "field_id": field_id,
+                            "wybrano": field_id in st.session_state.treatment_selected_fields,
+                            "pole": str(field["name"]),
+                            "uprawa": crop_name or "Brak przypisania",
+                            "powierzchnia_ha": float(get_field_plot_area(field_id)),
+                        }
+                    )
+
+                picker_df = pd.DataFrame(picker_rows)
+
+                if search_query:
+                    picker_df = picker_df[
+                        picker_df["pole"].str.contains(str(search_query), case=False, na=False)
+                    ]
+
+                sort_column = "pole" if sort_by == "Nazwa pola" else "uprawa"
+                ascending = sort_direction == "Rosnąco"
+                picker_df = picker_df.sort_values(
+                    by=[sort_column, "pole"],
+                    ascending=[ascending, True],
+                    kind="stable",
+                ).reset_index(drop=True)
+
+                edited_picker_df = st.data_editor(
+                    picker_df[["field_id", "wybrano", "pole", "uprawa", "powierzchnia_ha"]],
+                    use_container_width=True,
+                    hide_index=True,
+                    disabled=["field_id", "pole", "uprawa", "powierzchnia_ha"],
+                    column_config={
+                        "field_id": None,
+                        "wybrano": st.column_config.CheckboxColumn("Wybór"),
+                        "pole": st.column_config.TextColumn("Pole"),
+                        "uprawa": st.column_config.TextColumn("Uprawa"),
+                        "powierzchnia_ha": st.column_config.NumberColumn("Powierzchnia [ha]", format="%.2f"),
+                    },
+                    key=f"treatment_field_picker_table_{int(season_id)}",
+                )
+
+                selected_ids = [
+                    int(field_id)
+                    for field_id in edited_picker_df.loc[edited_picker_df["wybrano"], "field_id"].tolist()
+                ]
+
+                st.caption(f"Zaznaczono pól: {len(selected_ids)}")
+                action_cols = st.columns([1, 1])
+                with action_cols[0]:
+                    if st.button("Zastosuj wybór", key=f"apply_treatment_field_picker_{int(season_id)}", use_container_width=True):
+                        st.session_state.treatment_selected_fields = selected_ids
                         st.rerun()
-            else:
+                with action_cols[1]:
+                    if st.button("Anuluj", key=f"cancel_treatment_field_picker_{int(season_id)}", use_container_width=True):
+                        st.rerun()
+
+            if fields_df.empty:
                 st.info("Najpierw dodaj pole")
+            else:
+                can_open_field_picker = season_id is not None
+                if st.button(
+                    "Wybierz pole",
+                    key="open_treatment_field_picker_dialog",
+                    use_container_width=True,
+                    disabled=not can_open_field_picker,
+                ):
+                    open_treatment_field_picker_dialog()
+                if not can_open_field_picker:
+                    st.caption("Najpierw wybierz sezon, aby aktywować wybór pól.")
 
             if st.session_state.treatment_selected_fields:
                 selected_field_rows = []
