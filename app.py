@@ -2530,8 +2530,8 @@ def main() -> None:
 
                 if "treatment_product_picker_category_filter" not in st.session_state:
                     st.session_state.treatment_product_picker_category_filter = "ALL"
-                if "treatment_product_picker_selected_key" not in st.session_state:
-                    st.session_state.treatment_product_picker_selected_key = None
+                if "treatment_product_picker_pending_selected_keys" not in st.session_state:
+                    st.session_state.treatment_product_picker_pending_selected_keys = []
 
                 category_filter_cols = st.columns(len(PRODUCT_TABLES))
                 current_category_filter = str(st.session_state.get("treatment_product_picker_category_filter") or "ALL")
@@ -2546,7 +2546,6 @@ def main() -> None:
                         st.session_state.treatment_product_picker_category_filter = (
                             "ALL" if is_active_filter else category_name
                         )
-                        st.rerun()
 
                 active_filter = str(st.session_state.get("treatment_product_picker_category_filter") or "ALL")
                 if active_filter == "ALL":
@@ -2585,9 +2584,12 @@ def main() -> None:
                         | picker_products_df["notatki"].str.contains(search_value, case=False, na=False)
                     ]
 
-                current_selected_product_key = st.session_state.get("treatment_product_picker_selected_key")
+                pending_selected_product_keys = set(
+                    str(product_key)
+                    for product_key in st.session_state.get("treatment_product_picker_pending_selected_keys", [])
+                )
                 picker_products_df = picker_products_df.sort_values(by=["nazwa", "kategoria"], kind="stable").reset_index(drop=True)
-                picker_products_df["wybrano"] = picker_products_df["product_key"] == current_selected_product_key
+                picker_products_df["wybrano"] = picker_products_df["product_key"].isin(pending_selected_product_keys)
 
                 edited_products_df = st.data_editor(
                     picker_products_df[["product_key", "wybrano", "nazwa", "kategoria", "jednostka", "notatki"]],
@@ -2608,50 +2610,50 @@ def main() -> None:
                 checked_product_keys = edited_products_df.loc[
                     edited_products_df["wybrano"], "product_key"
                 ].tolist()
-                visible_product_keys = set(edited_products_df["product_key"].tolist())
-                if checked_product_keys:
-                    st.session_state.treatment_product_picker_selected_key = str(checked_product_keys[-1])
-                elif current_selected_product_key in visible_product_keys:
-                    st.session_state.treatment_product_picker_selected_key = None
+                visible_product_keys = {
+                    str(product_key)
+                    for product_key in edited_products_df["product_key"].tolist()
+                }
+                merged_selected_product_keys = sorted(
+                    (pending_selected_product_keys - visible_product_keys)
+                    | {str(product_key) for product_key in checked_product_keys}
+                )
+                st.session_state.treatment_product_picker_pending_selected_keys = merged_selected_product_keys
 
-                selected_product_key = st.session_state.get("treatment_product_picker_selected_key")
-                selected_product_row = None
-                if selected_product_key:
-                    selected_matches = all_products_df[all_products_df["product_key"] == str(selected_product_key)]
-                    if not selected_matches.empty:
-                        selected_product_row = selected_matches.iloc[0]
-
-                if selected_product_row is not None:
-                    st.caption(
-                        f"Wybrano: {selected_product_row['nazwa']} ({selected_product_row['kategoria']}, {selected_product_row['jednostka']})"
-                    )
-                else:
-                    st.caption("Wybierz produkt z tabeli")
+                st.caption(f"Zaznaczono produktów: {len(merged_selected_product_keys)}")
 
                 product_picker_action_cols = st.columns([1, 1])
                 with product_picker_action_cols[0]:
-                    if st.button("Dodaj wybrany produkt", key="add_selected_treatment_product", use_container_width=True):
-                        if selected_product_row is None:
-                            st.warning("Wybierz produkt, który chcesz dodać")
+                    if st.button("Dodaj zaznaczone produkty", key="add_selected_treatment_product", use_container_width=True):
+                        if not merged_selected_product_keys:
+                            st.warning("Zaznacz co najmniej jeden produkt")
                         else:
-                            st.session_state.treatment_products.append(
-                                {
-                                    "category": str(selected_product_row["kategoria"]),
-                                    "product_name": str(selected_product_row["nazwa"]),
-                                    "price_per_unit": float(selected_product_row["price_per_unit"]),
-                                    "unit": str(selected_product_row["jednostka"]),
-                                    "dose": 0.0,
-                                    "area_ha": total_selected_area,
-                                }
-                            )
+                            selected_products_df = all_products_df[
+                                all_products_df["product_key"].isin(merged_selected_product_keys)
+                            ].sort_values(by=["nazwa", "kategoria"], kind="stable")
+
+                            for _, selected_product_row in selected_products_df.iterrows():
+                                st.session_state.treatment_products.append(
+                                    {
+                                        "category": str(selected_product_row["kategoria"]),
+                                        "product_name": str(selected_product_row["nazwa"]),
+                                        "price_per_unit": float(selected_product_row["price_per_unit"]),
+                                        "unit": str(selected_product_row["jednostka"]),
+                                        "dose": 0.0,
+                                        "area_ha": total_selected_area,
+                                    }
+                                )
+                            st.session_state.treatment_product_picker_pending_selected_keys = []
                             st.rerun()
                 with product_picker_action_cols[1]:
                     if st.button("Anuluj", key="cancel_treatment_product_picker", use_container_width=True):
+                        st.session_state.treatment_product_picker_pending_selected_keys = []
                         st.rerun()
 
             product_action_cols = st.columns([1, 1])
             with product_action_cols[0]:
                 if st.button("Dodaj produkt", key="add_treatment_product", use_container_width=True):
+                    st.session_state.treatment_product_picker_pending_selected_keys = []
                     open_treatment_product_picker_dialog()
             with product_action_cols[1]:
                 if st.button("Usuń", key="remove_last_treatment_product", use_container_width=True, disabled=not st.session_state.treatment_products):
