@@ -7,6 +7,10 @@ from typing import Any, Optional
 
 import pandas as pd
 import streamlit as st
+try:
+    from st_keyup import st_keyup
+except ImportError:
+    st_keyup = None
 
 import db
 from auth import delete_registered_user, is_admin_username, list_registered_users, set_registered_user_password, SESSION_AUTH_USERNAME, require_authentication, show_password_change_form
@@ -2307,26 +2311,22 @@ def main() -> None:
                     st.info("Najpierw dodaj pole")
                     return
 
-                search_query = st.text_input(
-                    "Wyszukaj pole po nazwie",
-                    value=st.session_state.get("treatment_field_picker_search", ""),
-                    key="treatment_field_picker_search",
-                    placeholder="Wpisz nazwę pola...",
-                )
-
-                sort_cols = st.columns([1, 1])
-                with sort_cols[0]:
-                    sort_by = st.selectbox(
-                        "Sortuj po",
-                        options=["Nazwa pola", "Uprawa"],
-                        key="treatment_field_picker_sort_by",
+                if st_keyup is not None:
+                    search_query = st_keyup(
+                        "Wyszukaj pole po nazwie",
+                        value=st.session_state.get("treatment_field_picker_search", ""),
+                        key="treatment_field_picker_search",
+                        placeholder="Wpisz nazwę pola...",
+                        debounce=0,
                     )
-                with sort_cols[1]:
-                    sort_direction = st.selectbox(
-                        "Kierunek",
-                        options=["Rosnąco", "Malejąco"],
-                        key="treatment_field_picker_sort_direction",
+                else:
+                    search_query = st.text_input(
+                        "Wyszukaj pole po nazwie",
+                        value=st.session_state.get("treatment_field_picker_search", ""),
+                        key="treatment_field_picker_search",
+                        placeholder="Wpisz nazwę pola...",
                     )
+                    st.caption("Live search po każdym znaku wymaga pakietu streamlit-keyup.")
 
                 picker_rows = []
                 for _, field in fields_df.iterrows():
@@ -2352,14 +2352,6 @@ def main() -> None:
                     picker_df = picker_df[
                         picker_df["pole"].str.contains(str(search_query), case=False, na=False)
                     ]
-
-                sort_column = "pole" if sort_by == "Nazwa pola" else "uprawa"
-                ascending = sort_direction == "Rosnąco"
-                picker_df = picker_df.sort_values(
-                    by=[sort_column, "pole"],
-                    ascending=[ascending, True],
-                    kind="stable",
-                ).reset_index(drop=True)
 
                 edited_picker_df = st.data_editor(
                     picker_df[["field_id", "wybrano", "pole", "uprawa", "powierzchnia_ha"]],
