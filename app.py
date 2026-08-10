@@ -1,4 +1,5 @@
 import io
+import importlib
 import json
 import os
 import re
@@ -8,7 +9,7 @@ from typing import Any, Optional
 import pandas as pd
 import streamlit as st
 try:
-    from st_keyup import st_keyup
+    st_keyup = importlib.import_module("st_keyup").st_keyup
 except ImportError:
     st_keyup = None
 
@@ -2311,6 +2312,11 @@ def main() -> None:
                     st.info("Najpierw dodaj pole")
                     return
 
+                if "treatment_field_picker_pending_selected_fields" not in st.session_state:
+                    st.session_state.treatment_field_picker_pending_selected_fields = list(
+                        st.session_state.treatment_selected_fields
+                    )
+
                 if st_keyup is not None:
                     search_query = st_keyup(
                         "Wyszukaj pole po nazwie",
@@ -2329,6 +2335,10 @@ def main() -> None:
                     st.caption("Live search po każdym znaku wymaga pakietu streamlit-keyup.")
 
                 picker_rows = []
+                pending_selected_ids = set(
+                    int(field_id)
+                    for field_id in st.session_state.get("treatment_field_picker_pending_selected_fields", [])
+                )
                 for _, field in fields_df.iterrows():
                     field_id = int(field["id"])
                     assignment = get_crop_assignment(field_id, int(season_id))
@@ -2339,7 +2349,7 @@ def main() -> None:
                     picker_rows.append(
                         {
                             "field_id": field_id,
-                            "wybrano": field_id in st.session_state.treatment_selected_fields,
+                            "wybrano": field_id in pending_selected_ids,
                             "pole": str(field["name"]),
                             "uprawa": crop_name or "Brak przypisania",
                             "powierzchnia_ha": float(get_field_plot_area(field_id)),
@@ -2373,14 +2383,26 @@ def main() -> None:
                     for field_id in edited_picker_df.loc[edited_picker_df["wybrano"], "field_id"].tolist()
                 ]
 
-                st.caption(f"Zaznaczono pól: {len(selected_ids)}")
+                visible_field_ids = {
+                    int(field_id)
+                    for field_id in edited_picker_df["field_id"].tolist()
+                }
+                merged_selected_ids = sorted(
+                    (pending_selected_ids - visible_field_ids) | set(selected_ids)
+                )
+                st.session_state.treatment_field_picker_pending_selected_fields = merged_selected_ids
+
+                st.caption(f"Zaznaczono pól: {len(merged_selected_ids)}")
                 action_cols = st.columns([1, 1])
                 with action_cols[0]:
                     if st.button("Zastosuj wybór", key=f"apply_treatment_field_picker_{int(season_id)}", use_container_width=True):
-                        st.session_state.treatment_selected_fields = selected_ids
+                        st.session_state.treatment_selected_fields = merged_selected_ids
                         st.rerun()
                 with action_cols[1]:
                     if st.button("Anuluj", key=f"cancel_treatment_field_picker_{int(season_id)}", use_container_width=True):
+                        st.session_state.treatment_field_picker_pending_selected_fields = list(
+                            st.session_state.treatment_selected_fields
+                        )
                         st.rerun()
 
             if fields_df.empty:
