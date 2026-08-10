@@ -3,6 +3,7 @@ import importlib
 import json
 import os
 import re
+import time
 from datetime import date
 from typing import Any, Optional
 
@@ -1434,18 +1435,19 @@ def save_treatments(
     notes: str,
     crop_id: Optional[int] = None,
     crop_name: str = "",
-) -> None:
+) -> int:
     if not field_ids or not products:
-        return
+        return 0
 
     valid_field_ids = [field_id for field_id in field_ids if field_id is not None]
     if not valid_field_ids:
-        return
+        return 0
 
     owner = _current_owner()
     field_areas = {int(field_id): float(get_field_plot_area(int(field_id))) for field_id in valid_field_ids}
     total_selected_area = float(sum(field_areas.values()))
     equal_share = 1.0 / len(valid_field_ids) if valid_field_ids else 0.0
+    inserted_treatments = 0
 
     with get_connection() as conn:
         for field_id in valid_field_ids:
@@ -1486,6 +1488,7 @@ def save_treatments(
                 ),
             )
             treatment_id = cursor.lastrowid
+            inserted_treatments += 1
 
             for product in field_products:
                 dose_value = parse_dose_value(str(product["dose"]))
@@ -1506,6 +1509,7 @@ def save_treatments(
                     ),
                 )
         conn.commit()
+    return inserted_treatments
 
 
 def save_treatment(
@@ -1516,8 +1520,8 @@ def save_treatment(
     notes: str,
     crop_id: Optional[int] = None,
     crop_name: str = "",
-) -> None:
-    save_treatments([field_id], treatment_date, treatment_type, products, notes, crop_id, crop_name)
+) -> int:
+    return save_treatments([field_id], treatment_date, treatment_type, products, notes, crop_id, crop_name)
 
 
 def parse_treatment_products(notes: Optional[str], row: dict) -> list[dict]:
@@ -2639,7 +2643,7 @@ def main() -> None:
                                         "product_name": str(selected_product_row["nazwa"]),
                                         "price_per_unit": float(selected_product_row["price_per_unit"]),
                                         "unit": str(selected_product_row["jednostka"]),
-                                        "dose": 0.0,
+                                        "dose": 1.0 if str(selected_product_row["kategoria"]) == "Maszyny" else 0.0,
                                         "area_ha": total_selected_area,
                                     }
                                 )
@@ -2681,6 +2685,7 @@ def main() -> None:
                             product_row["product_name"] = ""
                             product_row["price_per_unit"] = 0.0
                             product_row["unit"] = ""
+                            product_row["dose"] = 1.0 if category == "Maszyny" else 0.0
                         else:
                             product_row["category"] = category
 
@@ -2747,19 +2752,27 @@ def main() -> None:
                     if row.get("product_name")
                 ]
                 if st.session_state.treatment_selected_fields and treatment_type and valid_products:
-                    save_treatments(
-                        field_ids=st.session_state.treatment_selected_fields,
-                        treatment_date=treatment_date.strftime("%Y-%m-%d"),
-                        treatment_type=treatment_type,
-                        products=valid_products,
-                        notes=notes,
-                        crop_id=selected_crop_id,
-                        crop_name=selected_crop_name,
-                    )
-                    st.session_state.treatment_products = []
-                    st.session_state.treatment_selected_fields = []
-                    st.success("Zabieg zapisany, koszty obliczone automatycznie")
-                    st.rerun()
+                    try:
+                        inserted_count = save_treatments(
+                            field_ids=st.session_state.treatment_selected_fields,
+                            treatment_date=treatment_date.strftime("%Y-%m-%d"),
+                            treatment_type=treatment_type,
+                            products=valid_products,
+                            notes=notes,
+                            crop_id=selected_crop_id,
+                            crop_name=selected_crop_name,
+                        )
+                    except Exception as exc:
+                        st.error(f"Nie udało się zapisać zabiegu: {exc}")
+                    else:
+                        if inserted_count > 0:
+                            st.success("Zabieg zapisano")
+                            time.sleep(2.5)
+                            st.session_state.treatment_products = []
+                            st.session_state.treatment_selected_fields = []
+                            st.rerun()
+                        else:
+                            st.warning("Nie udało się zaksięgować zabiegu. Formularz nie został wyczyszczony.")
                 else:
                     st.warning("Wybierz przynajmniej jedno pole, sezon i dodaj co najmniej jeden produkt")
 
