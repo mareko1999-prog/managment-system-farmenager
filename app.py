@@ -239,7 +239,8 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_username TEXT NOT NULL DEFAULT '',
                 name TEXT NOT NULL,
-                notes TEXT
+                notes TEXT,
+                is_default INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -360,6 +361,7 @@ def init_db() -> None:
     ensure_column('Nawozy', "k2o_pct", "k2o_pct REAL DEFAULT 0")
     ensure_column('Nawozy', "so3_pct", "so3_pct REAL DEFAULT 0")
     ensure_column('Nawozy', "cao_pct", "cao_pct REAL DEFAULT 0")
+    ensure_column("seasons", "is_default", "is_default INTEGER NOT NULL DEFAULT 0")
 
 
 def _clear_data_cache() -> None:
@@ -399,13 +401,26 @@ def load_farms(owner: str) -> pd.DataFrame:
 
 @st.cache_data(ttl=60, show_spinner=False)
 def load_seasons(owner: str) -> pd.DataFrame:
-    columns = ["id", "name", "notes"]
+    columns = ["id", "name", "notes", "is_default"]
     with get_connection() as conn:
         rows = conn.execute(
-            "SELECT id, name, notes FROM seasons WHERE owner_username = ? ORDER BY name",
+            "SELECT id, name, notes, COALESCE(is_default, 0) AS is_default FROM seasons WHERE owner_username = ? ORDER BY is_default DESC, name",
             (owner,),
         ).fetchall()
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
+
+
+def set_default_season(season_id: Optional[int]) -> None:
+    owner = _current_owner()
+    with get_connection() as conn:
+        conn.execute("UPDATE seasons SET is_default = 0 WHERE owner_username = ?", (owner,))
+        if season_id is not None:
+            conn.execute(
+                "UPDATE seasons SET is_default = 1 WHERE id = ? AND owner_username = ?",
+                (season_id, owner),
+            )
+        conn.commit()
+    _clear_data_cache()
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -1208,7 +1223,16 @@ def save_farm(name: str, notes: str, owner_name: str = "") -> None:
 def save_season(name: str, notes: str) -> None:
     owner = _current_owner()
     with get_connection() as conn:
-        conn.execute("INSERT INTO seasons (owner_username, name, notes) VALUES (?, ?, ?)", (owner, name, notes))
+        existing_count_row = conn.execute(
+            "SELECT COUNT(*) FROM seasons WHERE owner_username = ?",
+            (owner,),
+        ).fetchone()
+        existing_count = int(existing_count_row[0]) if existing_count_row else 0
+        is_default = 1 if existing_count == 0 else 0
+        conn.execute(
+            "INSERT INTO seasons (owner_username, name, notes, is_default) VALUES (?, ?, ?, ?)",
+            (owner, name, notes, is_default),
+        )
         conn.commit()
     _clear_data_cache()
 
@@ -1931,23 +1955,46 @@ def main() -> None:
 
             st.subheader("Lista sezonów wegetacyjnych")
             if not seasons_df.empty:
-                header_cols = st.columns([4, 1.2])
+                header_cols = st.columns([3.3, 1.1, 1.2])
                 header_cols[0].markdown("**Nazwa sezonu**")
-                header_cols[1].markdown("**Usuń**")
+                header_cols[1].markdown("**Domyślny**")
+                header_cols[2].markdown("**Usuń**")
+
+                selected_default_ids = []
 
                 for _, row in seasons_df.iterrows():
                     season_id = int(row["id"])
-                    row_cols = st.columns([4, 1.2])
+                    row_cols = st.columns([3.3, 1.1, 1.2])
                     row_cols[0].text_input(
                         "Nazwa sezonu",
                         value=str(row["name"]),
                         key=f"season_list_name_{season_id}",
                         label_visibility="collapsed",
                     )
-                    if row_cols[1].button("Usuń", key=f"delete_season_button_{season_id}", use_container_width=True):
+                    default_checkbox_key = f"season_list_default_{season_id}"
+                    if default_checkbox_key not in st.session_state:
+                        st.session_state[default_checkbox_key] = bool(int(row.get("is_default") or 0))
+
+                    is_default_checked = row_cols[1].checkbox(
+                        "Domyślny",
+                        value=bool(st.session_state.get(default_checkbox_key, False)),
+                        key=default_checkbox_key,
+                        label_visibility="collapsed",
+                    )
+                    if is_default_checked:
+                        selected_default_ids.append(season_id)
+
+                    if row_cols[2].button("Usuń", key=f"delete_season_button_{season_id}", use_container_width=True):
                         delete_season(season_id)
                         st.success("Sezon usunięty")
                         st.rerun()
+
+                if len(selected_default_ids) > 1:
+                    kept_default_id = selected_default_ids[-1]
+                    for _, row in seasons_df.iterrows():
+                        season_id = int(row["id"])
+                        st.session_state[f"season_list_default_{season_id}"] = season_id == kept_default_id
+                    st.rerun()
 
                 if st.button("Zapisz zmiany sezonów", key="save_season_list_changes"):
                     for _, row in seasons_df.iterrows():
@@ -1955,6 +2002,14 @@ def main() -> None:
                         updated_name = str(st.session_state.get(f"season_list_name_{season_id}", row["name"]))
                         if updated_name != str(row["name"]):
                             update_season(season_id, updated_name, str(row["notes"] or ""))
+
+                    selected_default_id = None
+                    for _, row in seasons_df.iterrows():
+                        season_id = int(row["id"])
+                        if bool(st.session_state.get(f"season_list_default_{season_id}", False)):
+                            selected_default_id = season_id
+                            break
+                    set_default_season(selected_default_id)
                     st.success("Lista sezonów zaktualizowana")
                     st.rerun()
             else:
@@ -2302,7 +2357,18 @@ def main() -> None:
             treatment_date = st.date_input("Data zabiegu", value=date.today())
             if not seasons_df.empty:
                 season_options = {row["name"]: row["id"] for _, row in seasons_df.iterrows()}
-                selected_season_name = st.selectbox("Sezon", options=list(season_options.keys()), key="treatment_season")
+                season_names = list(season_options.keys())
+                default_season_name = ""
+                if "is_default" in seasons_df.columns:
+                    default_rows = seasons_df[seasons_df["is_default"].fillna(0).astype(int) == 1]
+                    if not default_rows.empty:
+                        default_season_name = str(default_rows.iloc[0]["name"])
+                selected_season_name = st.selectbox(
+                    "Sezon",
+                    options=season_names,
+                    index=season_names.index(default_season_name) if default_season_name in season_names else 0,
+                    key="treatment_season",
+                )
                 season_id = season_options[selected_season_name]
                 treatment_type = selected_season_name
             else:
