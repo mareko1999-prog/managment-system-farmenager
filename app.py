@@ -2801,7 +2801,9 @@ def main() -> None:
                         product_row["area_ha"] = area_ha
 
                     quantity = round(float(product_row.get("dose") or 0.0) * max(float(product_row.get("area_ha") or 0.0), 0.0), 2)
-                    st.caption(f"Ilość: {quantity:.2f}")
+                    quantity_unit = str(product_row.get("unit") or "").strip()
+                    quantity_suffix = f" {quantity_unit}" if quantity_unit else ""
+                    st.caption(f"Ilość: {quantity:.2f}{quantity_suffix}")
                     if product_row.get("product_name") and product_row.get("price_per_unit") >= 0:
                         estimated_cost = round(float(product_row.get("dose") or 0.0) * max(float(product_row.get("area_ha") or 0.0), 0.0) * float(product_row.get("price_per_unit") or 0.0), 2)
                         st.caption(f"Szacunkowy koszt: {estimated_cost:.2f} zł")
