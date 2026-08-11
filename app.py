@@ -906,6 +906,9 @@ def build_fertilizer_nutrient_summary(report_df: pd.DataFrame, reference_area_ha
         dose_value = max(parse_dose_value(str(row.get("dose") or "0")), 0.0)
         area_ha = max(float(row.get("area_ha") or 0.0), 0.0)
         product_amount = dose_value * area_ha
+        unit_value = str(catalog_row.get("unit") or "").strip().casefold()
+        if unit_value == "t":
+            product_amount *= 1000.0
 
         nutrient_totals_kg["N"] += product_amount * max(float(catalog_row.get("n_pct") or 0.0), 0.0) / 100.0
         nutrient_totals_kg["P2O5"] += product_amount * max(float(catalog_row.get("p2o5_pct") or 0.0), 0.0) / 100.0
@@ -2906,7 +2909,10 @@ def main() -> None:
             with st.form(f"form_{selected_category}", clear_on_submit=True):
                 product_name = st.text_input("Nazwa produktu", key=f"{selected_category}_name")
                 price_per_unit = st.number_input("Cena jednostkowa [zł]", min_value=0.0, step=0.1, key=f"{selected_category}_price")
-                unit = st.text_input("Jednostka", key=f"{selected_category}_unit")
+                if selected_category == "Nawozy":
+                    unit = st.selectbox("Jednostka", options=["kg", "t"], key=f"{selected_category}_unit")
+                else:
+                    unit = st.text_input("Jednostka", key=f"{selected_category}_unit")
                 notes = st.text_area("Notatki", key=f"{selected_category}_notes")
                 if selected_category == "Nawozy":
                     st.markdown("**Zawartość składników pokarmowych [%]**")
@@ -2938,6 +2944,7 @@ def main() -> None:
                     "k2o_pct": st.column_config.NumberColumn("K₂O [%]", min_value=0.0, max_value=100.0),
                     "so3_pct": st.column_config.NumberColumn("SO₃ [%]", min_value=0.0, max_value=100.0),
                     "cao_pct": st.column_config.NumberColumn("CaO [%]", min_value=0.0, max_value=100.0),
+                    "unit": st.column_config.SelectboxColumn("Jednostka", options=["kg", "t"]),
                 } if selected_category == "Nawozy" else {}
                 edited_catalog = st.data_editor(
                     catalog_df,
