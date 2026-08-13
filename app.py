@@ -2205,27 +2205,73 @@ def main() -> None:
                     selected_season = ""
 
                 total_area = sum(get_field_plot_area(int(field_id)) for field_id in selected_field_ids)
-                editable_products = pd.DataFrame(group["products"])
-                if editable_products.empty:
-                    st.warning("Brak produktów w zabiegu")
-                    edited_products = editable_products
-                else:
-                    editable_products["area_ha"] = total_area
-                    edited_products = st.data_editor(
-                        editable_products,
-                        use_container_width=True,
-                        hide_index=True,
-                        disabled=["category", "product_name", "price_per_unit", "unit", "area_ha"],
-                        column_config={
-                            "category": st.column_config.TextColumn("Kategoria"),
-                            "product_name": st.column_config.TextColumn("Produkt"),
-                            "price_per_unit": st.column_config.NumberColumn("Cena [zł]"),
-                            "unit": st.column_config.TextColumn("Jednostka"),
-                            "dose": st.column_config.NumberColumn("Dawka na ha", min_value=0.0, step=0.1),
-                            "area_ha": st.column_config.NumberColumn("Powierzchnia [ha]", format="%.2f"),
-                        },
-                        key=f"batch_edit_products_{group_key}",
+                product_state_key = f"batch_edit_product_rows_{group_key}"
+                if product_state_key not in st.session_state:
+                    st.session_state[product_state_key] = [
+                        {**product, "area_ha": total_area}
+                        for product in group["products"]
+                    ]
+
+                st.markdown("**Produkty**")
+                product_rows = st.session_state[product_state_key]
+                for product_index, product_row in enumerate(product_rows):
+                    product_cols = st.columns([2, 2, 1.3, 1.2, 0.7])
+                    current_category = str(product_row.get("category") or PRODUCT_TABLES[0])
+                    category_index = PRODUCT_TABLES.index(current_category) if current_category in PRODUCT_TABLES else 0
+                    category = product_cols[0].selectbox(
+                        "Kategoria",
+                        options=PRODUCT_TABLES,
+                        index=category_index,
+                        key=f"batch_edit_category_{group_key}_{product_index}",
                     )
+                    product_catalog = load_product_catalog(category, _current_owner())
+                    if not product_catalog.empty:
+                        product_names = list(product_catalog["name"])
+                        current_product_name = str(product_row.get("product_name") or "")
+                        product_index_in_catalog = product_names.index(current_product_name) if current_product_name in product_names else 0
+                        selected_product_name = product_cols[1].selectbox(
+                            "Produkt",
+                            options=product_names,
+                            index=product_index_in_catalog,
+                            key=f"batch_edit_product_{group_key}_{product_index}",
+                        )
+                        selected_product = product_catalog[product_catalog["name"] == selected_product_name].iloc[0]
+                        product_row["category"] = category
+                        product_row["product_name"] = selected_product_name
+                        product_row["price_per_unit"] = float(selected_product["price_per_unit"])
+                        product_row["unit"] = str(selected_product["unit"])
+                    else:
+                        product_cols[1].info("Brak produktów")
+                        product_row["category"] = category
+                        product_row["product_name"] = ""
+                        product_row["price_per_unit"] = 0.0
+                        product_row["unit"] = ""
+
+                    product_row["dose"] = product_cols[2].number_input(
+                        "Dawka na ha",
+                        min_value=0.0,
+                        step=0.1,
+                        value=float(product_row.get("dose") or 0.0),
+                        key=f"batch_edit_dose_{group_key}_{product_index}",
+                    )
+                    product_cols[3].write(f"{total_area:.2f} ha")
+                    product_row["area_ha"] = total_area
+                    if product_cols[4].button("Usuń", key=f"remove_batch_product_{group_key}_{product_index}"):
+                        product_rows.pop(product_index)
+                        st.rerun()
+
+                if st.button("Dodaj produkt", key=f"add_batch_product_{group_key}"):
+                    product_rows.append(
+                        {
+                            "category": PRODUCT_TABLES[0],
+                            "product_name": "",
+                            "price_per_unit": 0.0,
+                            "unit": "",
+                            "dose": 0.0,
+                            "area_ha": total_area,
+                        }
+                    )
+                    st.rerun()
                 edit_notes = st.text_area(
                     "Opis",
                     value=extract_user_notes(group["notes"]),
@@ -2235,7 +2281,11 @@ def main() -> None:
                 action_cols = st.columns(2)
                 with action_cols[0]:
                     if st.button("Zapisz zmiany", key=f"save_batch_edit_{group_key}", use_container_width=True):
-                        products = edited_products.to_dict("records") if not edited_products.empty else []
+                        products = [
+                            product_row
+                            for product_row in product_rows
+                            if product_row.get("product_name")
+                        ]
                         if selected_field_ids and selected_season and products:
                             inserted_count = replace_treatment_batch(
                                 batch_id=group["batch_id"],
@@ -2247,16 +2297,17 @@ def main() -> None:
                                 notes=edit_notes,
                             )
                             if inserted_count:
-                                st.success("Zabieg zaktualizowany")
-                                st.rerun()
-                            st.error("Nie udało się zaktualizować zabiegu")
+                                del st.session_state[product_state_key]
+                                st.rerun(scope="app")
+                            else:
+                                st.error("Nie udało się zaktualizować zabiegu")
                         else:
                             st.warning("Wybierz pola, sezon i zachowaj co najmniej jeden produkt")
                 with action_cols[1]:
                     if st.button("Usuń zabieg", key=f"delete_batch_{group_key}", use_container_width=True):
                         delete_treatment_batch(group["batch_id"], group["treatment_ids"])
-                        st.success("Zabieg usunięty")
-                        st.rerun()
+                        st.session_state.pop(product_state_key, None)
+                        st.rerun(scope="app")
 
             if not treatment_groups:
                 st.info("Brak zabiegów do wyświetlenia")
@@ -2274,6 +2325,7 @@ def main() -> None:
                     row_cols[3].write(f"{float(group['total_area_ha']):.2f}")
                     row_cols[4].write(group["product_name"])
                     if row_cols[5].button("Edytuj", key=f"open_batch_edit_{group_key}", use_container_width=True):
+                        st.session_state.pop(f"batch_edit_product_rows_{group_key}", None)
                         open_treatment_batch_editor(group)
 
                     with st.expander("Szczegóły"):
