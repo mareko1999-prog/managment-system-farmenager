@@ -4,6 +4,7 @@ import json
 import os
 import re
 import time
+from uuid import uuid4
 from datetime import date
 from typing import Any, Optional
 
@@ -264,6 +265,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS treatments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 owner_username TEXT NOT NULL DEFAULT '',
+                batch_id TEXT,
                 field_id INTEGER NOT NULL,
                 treatment_date TEXT NOT NULL,
                 treatment_type TEXT NOT NULL,
@@ -356,6 +358,7 @@ def init_db() -> None:
     ensure_column("treatments", "crop_id", "crop_id INTEGER")
     ensure_column("treatments", "crop_name", "crop_name TEXT")
     ensure_column("treatments", "products_json", "products_json TEXT")
+    ensure_column("treatments", "batch_id", "batch_id TEXT")
     ensure_column('Nawozy', "n_pct", "n_pct REAL DEFAULT 0")
     ensure_column('Nawozy', "p2o5_pct", "p2o5_pct REAL DEFAULT 0")
     ensure_column('Nawozy', "k2o_pct", "k2o_pct REAL DEFAULT 0")
@@ -748,6 +751,7 @@ def load_plots(owner: str) -> pd.DataFrame:
 def load_treatments(owner: str) -> pd.DataFrame:
     columns = [
         "id",
+        "batch_id",
         "field_id",
         "treatment_date",
         "season",
@@ -770,6 +774,7 @@ def load_treatments(owner: str) -> pd.DataFrame:
             """
             SELECT
                 t.id,
+                t.batch_id,
                 t.field_id,
                 t.treatment_date,
                 t.treatment_type AS season,
@@ -794,6 +799,42 @@ def load_treatments(owner: str) -> pd.DataFrame:
             (owner,),
         ).fetchall()
     return _dataframe_from_rows([dict(zip(columns, row)) for row in rows], columns)
+
+
+def build_treatment_list_groups(treatments_df: pd.DataFrame) -> list[dict]:
+    groups: dict[str, list[dict]] = {}
+    for _, row in treatments_df.iterrows():
+        row_dict = row.to_dict()
+        batch_id = str(row_dict.get("batch_id") or "").strip()
+        group_key = batch_id or f"legacy-{int(row_dict['id'])}"
+        groups.setdefault(group_key, []).append(row_dict)
+
+    grouped_rows = []
+    for group_key, rows in groups.items():
+        first_row = rows[0]
+        field_names = list(dict.fromkeys(str(row.get("field_name") or "-") for row in rows))
+        product_names = [
+            str(product.get("product_name") or "").strip()
+            for product in parse_treatment_products(first_row.get("notes"), first_row)
+            if str(product.get("product_name") or "").strip()
+        ]
+        grouped_rows.append(
+            {
+                "id": str(first_row.get("batch_id") or int(first_row["id"])),
+                "group_key": group_key,
+                "batch_id": str(first_row.get("batch_id") or ""),
+                "treatment_ids": [int(row["id"]) for row in rows],
+                "treatment_date": str(first_row.get("treatment_date") or ""),
+                "season": str(first_row.get("season") or ""),
+                "field_name": ", ".join(field_names),
+                "total_area_ha": sum(float(get_field_plot_area(int(row["field_id"]))) for row in rows),
+                "product_name": ", ".join(product_names) or str(first_row.get("product_name") or first_row.get("product") or "-"),
+                "notes": str(first_row.get("notes") or ""),
+                "fields": rows,
+                "products": parse_treatment_products(first_row.get("notes"), first_row),
+            }
+        )
+    return sorted(grouped_rows, key=lambda row: (row["treatment_date"], row["id"]), reverse=True)
 
 
 @st.cache_data(ttl=60, show_spinner=False)
@@ -1462,6 +1503,7 @@ def save_treatments(
     notes: str,
     crop_id: Optional[int] = None,
     crop_name: str = "",
+    batch_id: Optional[str] = None,
 ) -> int:
     if not field_ids or not products:
         return 0
@@ -1475,6 +1517,7 @@ def save_treatments(
     total_selected_area = float(sum(field_areas.values()))
     equal_share = 1.0 / len(valid_field_ids) if valid_field_ids else 0.0
     inserted_treatments = 0
+    treatment_batch_id = str(batch_id or uuid4())
 
     with get_connection() as conn:
         for field_id in valid_field_ids:
@@ -1492,12 +1535,13 @@ def save_treatments(
             cursor = conn.execute(
                 """
                 INSERT INTO treatments (
-                    owner_username, field_id, treatment_date, treatment_type, product, product_category, product_name, product_unit, product_price, dose, area_ha, crop_id, crop_name, notes, products_json
+                    owner_username, batch_id, field_id, treatment_date, treatment_type, product, product_category, product_name, product_unit, product_price, dose, area_ha, crop_id, crop_name, notes, products_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     owner,
+                    treatment_batch_id,
                     field_id,
                     treatment_date,
                     treatment_type,
@@ -1583,6 +1627,38 @@ def delete_treatment(treatment_id: int) -> None:
         conn.execute("DELETE FROM treatments WHERE id = ? AND owner_username = ?", (treatment_id, owner))
         conn.commit()
     _clear_data_cache()
+
+
+def delete_treatment_batch(batch_id: str, treatment_ids: list[int]) -> None:
+    owner = _current_owner()
+    with get_connection() as conn:
+        if batch_id:
+            treatment_rows = conn.execute(
+                "SELECT id FROM treatments WHERE batch_id = ? AND owner_username = ?",
+                (batch_id, owner),
+            ).fetchall()
+            resolved_treatment_ids = [int(row[0]) for row in treatment_rows]
+        else:
+            resolved_treatment_ids = [int(treatment_id) for treatment_id in treatment_ids]
+
+        for treatment_id in resolved_treatment_ids:
+            conn.execute("DELETE FROM costs WHERE treatment_id = ? AND owner_username = ?", (treatment_id, owner))
+            conn.execute("DELETE FROM treatments WHERE id = ? AND owner_username = ?", (treatment_id, owner))
+        conn.commit()
+    _clear_data_cache()
+
+
+def replace_treatment_batch(
+    batch_id: str,
+    previous_treatment_ids: list[int],
+    field_ids: list[int],
+    treatment_date: str,
+    treatment_type: str,
+    products: list[dict],
+    notes: str,
+) -> int:
+    delete_treatment_batch(batch_id, previous_treatment_ids)
+    return save_treatments(field_ids, treatment_date, treatment_type, products, notes, batch_id=batch_id or None)
 
 
 def update_treatment(
@@ -2094,13 +2170,142 @@ def main() -> None:
 
         if st.session_state.management_section == "treatments_list":
             st.subheader("Lista zabiegów")
-            treatments_list_df = treatments_df.drop(
-                columns=["field_id", "product_unit", "crop_id", "field_area_ha", "products_json"],
-                errors="ignore",
-            )
-            st.dataframe(treatments_list_df, use_container_width=True, hide_index=True)
+            treatment_groups = build_treatment_list_groups(treatments_df)
 
-            st.subheader("Edycja i usuwanie zabiegów")
+            @st.dialog("Edytuj zabieg", width="large")
+            def open_treatment_batch_editor(group: dict) -> None:
+                group_key = str(group["group_key"])
+                current_field_ids = [int(row["field_id"]) for row in group["fields"]]
+                field_options = {
+                    int(row["id"]): str(row["name"])
+                    for _, row in fields_df.iterrows()
+                }
+                selected_field_ids = st.multiselect(
+                    "Pola",
+                    options=list(field_options.keys()),
+                    default=current_field_ids,
+                    format_func=lambda field_id: field_options[field_id],
+                    key=f"batch_edit_fields_{group_key}",
+                )
+                edit_date = st.date_input(
+                    "Data zabiegu",
+                    value=date.fromisoformat(group["treatment_date"]),
+                    key=f"batch_edit_date_{group_key}",
+                )
+                season_names = list(seasons_df["name"]) if not seasons_df.empty else []
+                if season_names:
+                    selected_season = st.selectbox(
+                        "Sezon",
+                        options=season_names,
+                        index=season_names.index(group["season"]) if group["season"] in season_names else 0,
+                        key=f"batch_edit_season_{group_key}",
+                    )
+                else:
+                    st.warning("Najpierw dodaj sezon wegetacyjny")
+                    selected_season = ""
+
+                total_area = sum(get_field_plot_area(int(field_id)) for field_id in selected_field_ids)
+                editable_products = pd.DataFrame(group["products"])
+                if editable_products.empty:
+                    st.warning("Brak produktów w zabiegu")
+                    edited_products = editable_products
+                else:
+                    editable_products["area_ha"] = total_area
+                    edited_products = st.data_editor(
+                        editable_products,
+                        use_container_width=True,
+                        hide_index=True,
+                        disabled=["category", "product_name", "price_per_unit", "unit", "area_ha"],
+                        column_config={
+                            "category": st.column_config.TextColumn("Kategoria"),
+                            "product_name": st.column_config.TextColumn("Produkt"),
+                            "price_per_unit": st.column_config.NumberColumn("Cena [zł]"),
+                            "unit": st.column_config.TextColumn("Jednostka"),
+                            "dose": st.column_config.NumberColumn("Dawka na ha", min_value=0.0, step=0.1),
+                            "area_ha": st.column_config.NumberColumn("Powierzchnia [ha]", format="%.2f"),
+                        },
+                        key=f"batch_edit_products_{group_key}",
+                    )
+                edit_notes = st.text_area(
+                    "Opis",
+                    value=extract_user_notes(group["notes"]),
+                    key=f"batch_edit_notes_{group_key}",
+                )
+
+                action_cols = st.columns(2)
+                with action_cols[0]:
+                    if st.button("Zapisz zmiany", key=f"save_batch_edit_{group_key}", use_container_width=True):
+                        products = edited_products.to_dict("records") if not edited_products.empty else []
+                        if selected_field_ids and selected_season and products:
+                            inserted_count = replace_treatment_batch(
+                                batch_id=group["batch_id"],
+                                previous_treatment_ids=group["treatment_ids"],
+                                field_ids=selected_field_ids,
+                                treatment_date=edit_date.strftime("%Y-%m-%d"),
+                                treatment_type=selected_season,
+                                products=products,
+                                notes=edit_notes,
+                            )
+                            if inserted_count:
+                                st.success("Zabieg zaktualizowany")
+                                st.rerun()
+                            st.error("Nie udało się zaktualizować zabiegu")
+                        else:
+                            st.warning("Wybierz pola, sezon i zachowaj co najmniej jeden produkt")
+                with action_cols[1]:
+                    if st.button("Usuń zabieg", key=f"delete_batch_{group_key}", use_container_width=True):
+                        delete_treatment_batch(group["batch_id"], group["treatment_ids"])
+                        st.success("Zabieg usunięty")
+                        st.rerun()
+
+            if not treatment_groups:
+                st.info("Brak zabiegów do wyświetlenia")
+            else:
+                header_cols = st.columns([2.1, 1.3, 3.2, 1.5, 3.2, 1])
+                for column, label in zip(header_cols, ["**ID**", "**Data**", "**Pola**", "**Suma powierzchni [ha]**", "**Produkty**", ""]):
+                    column.markdown(label)
+
+                for group in treatment_groups:
+                    group_key = str(group["group_key"])
+                    row_cols = st.columns([2.1, 1.3, 3.2, 1.5, 3.2, 1])
+                    row_cols[0].write(group["id"])
+                    row_cols[1].write(group["treatment_date"])
+                    row_cols[2].write(group["field_name"])
+                    row_cols[3].write(f"{float(group['total_area_ha']):.2f}")
+                    row_cols[4].write(group["product_name"])
+                    if row_cols[5].button("Edytuj", key=f"open_batch_edit_{group_key}", use_container_width=True):
+                        open_treatment_batch_editor(group)
+
+                    with st.expander("Szczegóły"):
+                        field_details = pd.DataFrame(
+                            [
+                                {
+                                    "Pole": str(row.get("field_name") or "-"),
+                                    "Powierzchnia [ha]": round(get_field_plot_area(int(row["field_id"])), 2),
+                                }
+                                for row in group["fields"]
+                            ]
+                        )
+                        st.markdown("**Pola**")
+                        st.dataframe(field_details, use_container_width=True, hide_index=True)
+                        product_details = pd.DataFrame(group["products"])
+                        if not product_details.empty:
+                            product_details = product_details.rename(
+                                columns={
+                                    "category": "Kategoria",
+                                    "product_name": "Produkt",
+                                    "dose": "Dawka",
+                                    "unit": "Jednostka",
+                                }
+                            )
+                            st.markdown("**Produkty i dawki**")
+                            st.dataframe(
+                                product_details[["Produkt", "Kategoria", "Dawka", "Jednostka"]],
+                                use_container_width=True,
+                                hide_index=True,
+                            )
+
+        elif st.session_state.management_section == "treatments_list_legacy":
             if not treatments_df.empty:
                 treatment_options = {
                     f"{row['treatment_date']} | {row['field_name'] or '-'} | {row['season'] or '-'} | {row['product_name'] or row['product'] or '-'}": int(row["id"])
