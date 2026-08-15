@@ -2279,6 +2279,10 @@ def main() -> None:
                     int(row["id"]): str(row["name"])
                     for _, row in fields_df.iterrows()
                 }
+                field_area_lookup = {
+                    int(field_id): get_field_plot_area(int(field_id))
+                    for field_id in field_options
+                }
                 selected_field_ids = st.multiselect(
                     "Pola",
                     options=list(field_options.keys()),
@@ -2303,7 +2307,7 @@ def main() -> None:
                     st.warning("Najpierw dodaj sezon wegetacyjny")
                     selected_season = ""
 
-                total_area = sum(get_field_plot_area(int(field_id)) for field_id in selected_field_ids)
+                total_area = sum(field_area_lookup.get(int(field_id), 0.0) for field_id in selected_field_ids)
                 product_state_key = f"batch_edit_product_rows_{group_key}"
                 if product_state_key not in st.session_state:
                     st.session_state[product_state_key] = [
@@ -2357,7 +2361,7 @@ def main() -> None:
                     product_row["area_ha"] = total_area
                     if product_cols[4].button("Usuń", key=f"remove_batch_product_{group_key}_{product_index}"):
                         product_rows.pop(product_index)
-                        st.rerun()
+                        st.rerun(scope="fragment")
 
                 if st.button("Dodaj produkt", key=f"add_batch_product_{group_key}"):
                     product_rows.append(
@@ -2370,7 +2374,7 @@ def main() -> None:
                             "area_ha": total_area,
                         }
                     )
-                    st.rerun()
+                    st.rerun(scope="fragment")
                 edit_notes = st.text_area(
                     "Opis",
                     value=extract_user_notes(group["notes"]),
@@ -2411,21 +2415,23 @@ def main() -> None:
             if not treatment_groups:
                 st.info("Brak zabiegów do wyświetlenia")
             else:
-                header_cols = st.columns([2.1, 1.3, 3.2, 1.5, 3.2, 1])
-                for column, label in zip(header_cols, ["**ID**", "**Data**", "**Pola**", "**Suma powierzchni [ha]**", "**Produkty**", ""]):
+                header_cols = st.columns([1.3, 1.4, 3.2, 1.5, 3.2, 1])
+                for column, label in zip(header_cols, ["**Data**", "**Sezon**", "**Pola**", "**Suma powierzchni [ha]**", "**Produkty**", ""]):
                     column.markdown(label)
+                st.divider()
 
                 for group in treatment_groups:
                     group_key = str(group["group_key"])
-                    row_cols = st.columns([2.1, 1.3, 3.2, 1.5, 3.2, 1])
-                    row_cols[0].write(group["id"])
-                    row_cols[1].write(group["treatment_date"])
+                    row_cols = st.columns([1.3, 1.4, 3.2, 1.5, 3.2, 1])
+                    row_cols[0].write(group["treatment_date"])
+                    row_cols[1].write(group["season"])
                     row_cols[2].write(group["field_name"])
                     row_cols[3].write(f"{float(group['total_area_ha']):.2f}")
                     row_cols[4].write(group["product_name"])
                     if row_cols[5].button("Edytuj", key=f"open_batch_edit_{group_key}", use_container_width=True):
                         st.session_state.pop(f"batch_edit_product_rows_{group_key}", None)
                         open_treatment_batch_editor(group)
+                    st.divider()
 
         elif st.session_state.management_section == "treatments_list_legacy":
             if not treatments_df.empty:
