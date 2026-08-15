@@ -67,6 +67,11 @@ class _ConnectionHandle:
         self._conn.commit()
         self._dirty = False
 
+    def rollback(self) -> None:
+        """Wycofuje zapisane w bieżącej transakcji zmiany."""
+        self._conn.rollback()
+        self._dirty = False
+
     def fetchone(self) -> Any:
         return self._conn.fetchone()
 

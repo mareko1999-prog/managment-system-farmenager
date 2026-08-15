@@ -1657,8 +1657,107 @@ def replace_treatment_batch(
     products: list[dict],
     notes: str,
 ) -> int:
-    delete_treatment_batch(batch_id, previous_treatment_ids)
-    return save_treatments(field_ids, treatment_date, treatment_type, products, notes, batch_id=batch_id or None)
+    valid_field_ids = [int(field_id) for field_id in field_ids if field_id is not None]
+    valid_products = [product for product in products if product.get("product_name")]
+    if not valid_field_ids or not valid_products:
+        return 0
+
+    owner = _current_owner()
+    field_areas = {
+        field_id: float(get_field_plot_area(field_id))
+        for field_id in valid_field_ids
+    }
+    total_selected_area = float(sum(field_areas.values()))
+    equal_share = 1.0 / len(valid_field_ids)
+    replacement_batch_id = str(batch_id or uuid4())
+
+    with get_connection() as conn:
+        try:
+            for treatment_id in previous_treatment_ids:
+                conn.execute(
+                    "DELETE FROM costs WHERE treatment_id = ? AND owner_username = ?",
+                    (int(treatment_id), owner),
+                )
+                conn.execute(
+                    "DELETE FROM treatments WHERE id = ? AND owner_username = ?",
+                    (int(treatment_id), owner),
+                )
+
+            for field_id in valid_field_ids:
+                share_factor = (
+                    field_areas[field_id] / total_selected_area
+                    if total_selected_area > 0
+                    else equal_share
+                )
+                field_products = [
+                    {
+                        **product,
+                        "area_ha": round(
+                            max(float(product.get("area_ha") or 0.0), 0.0) * share_factor,
+                            4,
+                        ),
+                    }
+                    for product in valid_products
+                ]
+                primary_product = field_products[0]
+                resolved_crop_id, resolved_crop_name = resolve_treatment_crop(
+                    field_id, treatment_type
+                )
+                cursor = conn.execute(
+                    """
+                    INSERT INTO treatments (
+                        owner_username, batch_id, field_id, treatment_date, treatment_type, product, product_category, product_name, product_unit, product_price, dose, area_ha, crop_id, crop_name, notes, products_json
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        owner,
+                        replacement_batch_id,
+                        field_id,
+                        treatment_date,
+                        treatment_type,
+                        primary_product["product_name"],
+                        primary_product["category"],
+                        primary_product["product_name"],
+                        primary_product["unit"],
+                        primary_product["price_per_unit"],
+                        str(primary_product["dose"]),
+                        primary_product["area_ha"],
+                        resolved_crop_id,
+                        resolved_crop_name,
+                        str(notes or ""),
+                        json.dumps(field_products, ensure_ascii=False),
+                    ),
+                )
+                treatment_id = cursor.lastrowid
+                for product in field_products:
+                    dose_value = parse_dose_value(str(product["dose"]))
+                    amount_pln = round(
+                        dose_value * max(product["area_ha"], 0.0) * max(product["price_per_unit"], 0.0),
+                        2,
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO costs (owner_username, treatment_id, cost_type, amount_pln, supplier, invoice_no, notes)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            owner,
+                            treatment_id,
+                            f"{product['category']} / {product['product_name']}",
+                            amount_pln,
+                            "",
+                            "",
+                            f"Dawka: {product['dose']}; powierzchnia: {product['area_ha']} ha",
+                        ),
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    _clear_data_cache()
+    return len(valid_field_ids)
 
 
 def update_treatment(
