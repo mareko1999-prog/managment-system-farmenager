@@ -32,7 +32,8 @@ LOCAL_SQLITE_PATH = os.path.join(os.path.dirname(__file__), "farmenager.db")
 # libSQL/SQLite nie gwarantuje bezpiecznego dostępu z wielu wątków jednocześnie,
 # a Streamlit obsługuje równoległe sesje użytkowników we współdzielonym procesie.
 # Blokada serializuje dostęp do jedynego, współdzielonego połączenia.
-_connection_lock = threading.Lock()
+# RLock pozwala funkcjom zapisu wykonać zagnieżdżony odczyt na tym samym wątku.
+_connection_lock = threading.RLock()
 
 
 _WRITE_OPS = ("INSERT", "UPDATE", "DELETE", "CREATE", "DROP", "ALTER", "REPLACE")

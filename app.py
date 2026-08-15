@@ -2427,35 +2427,6 @@ def main() -> None:
                         st.session_state.pop(f"batch_edit_product_rows_{group_key}", None)
                         open_treatment_batch_editor(group)
 
-                    with st.expander("Szczegóły"):
-                        field_details = pd.DataFrame(
-                            [
-                                {
-                                    "Pole": str(row.get("field_name") or "-"),
-                                    "Powierzchnia [ha]": round(get_field_plot_area(int(row["field_id"])), 2),
-                                }
-                                for row in group["fields"]
-                            ]
-                        )
-                        st.markdown("**Pola**")
-                        st.dataframe(field_details, use_container_width=True, hide_index=True)
-                        product_details = pd.DataFrame(group["products"])
-                        if not product_details.empty:
-                            product_details = product_details.rename(
-                                columns={
-                                    "category": "Kategoria",
-                                    "product_name": "Produkt",
-                                    "dose": "Dawka",
-                                    "unit": "Jednostka",
-                                }
-                            )
-                            st.markdown("**Produkty i dawki**")
-                            st.dataframe(
-                                product_details[["Produkt", "Kategoria", "Dawka", "Jednostka"]],
-                                use_container_width=True,
-                                hide_index=True,
-                            )
-
         elif st.session_state.management_section == "treatments_list_legacy":
             if not treatments_df.empty:
                 treatment_options = {
