@@ -1119,6 +1119,60 @@ def build_treatment_registry_report(
     return report_df
 
 
+def build_product_consumption_report(
+    treatments_df: pd.DataFrame,
+    date_from: date,
+    date_to: date,
+) -> pd.DataFrame:
+    columns = ["product_category", "product_name", "quantity", "unit"]
+    if treatments_df.empty or date_from > date_to:
+        return pd.DataFrame(columns=columns)
+
+    treatment_dates = pd.to_datetime(treatments_df["treatment_date"], errors="coerce")
+    filtered_treatments = treatments_df[
+        treatment_dates.notna()
+        & (treatment_dates.dt.date >= date_from)
+        & (treatment_dates.dt.date <= date_to)
+    ]
+    if filtered_treatments.empty:
+        return pd.DataFrame(columns=columns)
+
+    share_factors = get_treatment_share_factors(filtered_treatments)
+    rows = []
+    for _, treatment in filtered_treatments.iterrows():
+        share_factor = float(share_factors.get(int(treatment["id"]), 1.0))
+        for product in parse_treatment_products(treatment.get("notes"), treatment.to_dict()):
+            product_name = str(product.get("product_name") or "").strip()
+            if not product_name:
+                continue
+            quantity = (
+                parse_dose_value(str(product.get("dose") or 0.0))
+                * max(float(product.get("area_ha") or 0.0), 0.0)
+                * share_factor
+            )
+            rows.append(
+                {
+                    "product_category": str(product.get("category") or ""),
+                    "product_name": product_name,
+                    "quantity": quantity,
+                    "unit": str(product.get("unit") or ""),
+                }
+            )
+
+    if not rows:
+        return pd.DataFrame(columns=columns)
+
+    report_df = pd.DataFrame(rows)
+    report_df = (
+        report_df.groupby(columns[:2] + ["unit"], as_index=False, dropna=False)["quantity"]
+        .sum()
+    )
+    report_df["quantity"] = report_df["quantity"].round(2)
+    return report_df[report_df["quantity"] > 0].sort_values(
+        by=["product_name", "product_category", "unit"], kind="stable"
+    ).reset_index(drop=True)
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def load_product_catalog(table_name: str, owner: str) -> pd.DataFrame:
     base_columns = ["id", "name", "price_per_unit", "unit", "notes"]
@@ -3342,7 +3396,7 @@ def main() -> None:
         if "report_section" not in st.session_state:
             st.session_state.report_section = "crop_rotation"
 
-        report_buttons = st.columns(4)
+        report_buttons = st.columns(5)
         with report_buttons[0]:
             if st.button("Płodozmian", key="report_section_crop_rotation", use_container_width=True):
                 st.session_state.report_section = "crop_rotation"
@@ -3355,6 +3409,9 @@ def main() -> None:
         with report_buttons[3]:
             if st.button("Ewidencja zabiegów", key="report_section_registry", use_container_width=True):
                 st.session_state.report_section = "registry"
+        with report_buttons[4]:
+            if st.button("Zużycie", key="report_section_consumption", use_container_width=True):
+                st.session_state.report_section = "consumption"
 
         st.divider()
 
@@ -3553,6 +3610,7 @@ def main() -> None:
                             }
                         )
                         st.dataframe(registry_display_df, use_container_width=True, hide_index=True)
+
                         st.download_button(
                             "Eksportuj ewidencję zabiegów do XLSX",
                             data=to_excel_bytes(registry_report_df),
@@ -3595,6 +3653,38 @@ def main() -> None:
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="download_sor_registry_report",
                         )
+
+        elif st.session_state.report_section == "consumption":
+            st.subheader("Zużycie")
+            date_columns = st.columns(2)
+            with date_columns[0]:
+                consumption_date_from = st.date_input(
+                    "Wyświetl od", value=date.today(), key="consumption_date_from"
+                )
+            with date_columns[1]:
+                consumption_date_to = st.date_input(
+                    "Do", value=date.today(), key="consumption_date_to"
+                )
+
+            if st.button("Generuj", key="generate_consumption_report"):
+                consumption_report_df = build_product_consumption_report(
+                    treatments_df,
+                    consumption_date_from,
+                    consumption_date_to,
+                )
+                st.markdown("### Wyniki zużycia produktów")
+                if consumption_report_df.empty:
+                    st.info("Brak zużycia produktów w wybranym zakresie dat.")
+                else:
+                    consumption_display_df = consumption_report_df.rename(
+                        columns={
+                            "product_category": "kategoria",
+                            "product_name": "produkt",
+                            "quantity": "ilość",
+                            "unit": "jednostka",
+                        }
+                    )
+                    st.dataframe(consumption_display_df, use_container_width=True, hide_index=True)
 
 
 if __name__ == "__main__":
