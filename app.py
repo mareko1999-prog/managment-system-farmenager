@@ -380,6 +380,26 @@ def _clear_data_cache() -> None:
     load_product_catalog.clear()
 
 
+def _delete_confirmation(action_key: str, item_label: str) -> bool:
+    """Render a confirmation form and return whether deletion was confirmed."""
+    if st.session_state.get("pending_delete_action") != action_key:
+        return False
+
+    with st.form(f"confirm_delete_{action_key}"):
+        st.warning(f"Czy na pewno usunąć: {item_label}?")
+        confirm_cols = st.columns(2)
+        confirmed = confirm_cols[0].form_submit_button("Potwierdź usunięcie", use_container_width=True)
+        cancelled = confirm_cols[1].form_submit_button("Anuluj", use_container_width=True)
+
+    if cancelled:
+        st.session_state.pop("pending_delete_action", None)
+        st.rerun()
+    if confirmed:
+        st.session_state.pop("pending_delete_action", None)
+        return True
+    return False
+
+
 @st.cache_data(ttl=60, show_spinner=False)
 def load_fields(owner: str) -> pd.DataFrame:
     columns = ["id", "name", "area_ha", "notes"]
@@ -1979,7 +1999,10 @@ def main() -> None:
                         label_visibility="collapsed",
                     )
                     row_cols[1].write(f"{field_area:.2f}")
+                    delete_action = f"field_{field_id}"
                     if row_cols[2].button("Usuń", key=f"delete_field_button_{field_id}", use_container_width=True):
+                        st.session_state.pending_delete_action = delete_action
+                    if _delete_confirmation(delete_action, f"pole „{row['name']}”"):
                         delete_field(field_id)
                         st.success("Pole usunięte")
                         st.rerun()
@@ -2092,7 +2115,10 @@ def main() -> None:
                         key=f"plot_list_farm_{plot_id}",
                         label_visibility="collapsed",
                     )
+                    delete_action = f"plot_{plot_id}"
                     if row_cols[4].button("Usuń", key=f"delete_plot_button_{plot_id}", use_container_width=True):
+                        st.session_state.pending_delete_action = delete_action
+                    if _delete_confirmation(delete_action, f"działkę „{row['name']}”"):
                         delete_plot(plot_id)
                         st.success("Działka usunięta")
                         st.rerun()
@@ -2148,7 +2174,10 @@ def main() -> None:
                         key=f"farm_list_name_{farm_id}",
                         label_visibility="collapsed",
                     )
+                    delete_action = f"farm_{farm_id}"
                     if row_cols[1].button("Usuń", key=f"delete_farm_button_{farm_id}", use_container_width=True):
+                        st.session_state.pending_delete_action = delete_action
+                    if _delete_confirmation(delete_action, f"gospodarstwo „{row['name']}”"):
                         delete_farm(farm_id)
                         st.success("Gospodarstwo usunięte")
                         st.rerun()
@@ -2219,7 +2248,10 @@ def main() -> None:
                     if is_default_checked:
                         selected_default_ids.append(season_id)
 
+                    delete_action = f"season_{season_id}"
                     if row_cols[2].button("Usuń", key=f"delete_season_button_{season_id}", use_container_width=True):
+                        st.session_state.pending_delete_action = delete_action
+                    if _delete_confirmation(delete_action, f"sezon „{row['name']}”"):
                         delete_season(season_id)
                         st.success("Sezon usunięty")
                         st.rerun()
@@ -2282,7 +2314,10 @@ def main() -> None:
                         key=f"crop_list_name_{crop_id}",
                         label_visibility="collapsed",
                     )
+                    delete_action = f"crop_{crop_id}"
                     if row_cols[1].button("Usuń", key=f"delete_crop_button_{crop_id}", use_container_width=True):
+                        st.session_state.pending_delete_action = delete_action
+                    if _delete_confirmation(delete_action, f"uprawę „{row['name']}”"):
                         delete_crop(crop_id)
                         st.success("Uprawa usunięta")
                         st.rerun()
@@ -2464,7 +2499,10 @@ def main() -> None:
                         else:
                             st.warning("Wybierz pola, sezon i zachowaj co najmniej jeden produkt")
                 with action_cols[1]:
+                    delete_action = f"treatment_batch_{group_key}"
                     if st.button("Usuń zabieg", key=f"delete_batch_{group_key}", use_container_width=True):
+                        st.session_state.pending_delete_action = delete_action
+                    if _delete_confirmation(delete_action, f"zabieg z dnia {group['treatment_date']} ({group['field_name']})"):
                         delete_treatment_batch(group["batch_id"], group["treatment_ids"])
                         st.session_state.pop(product_state_key, None)
                         st.rerun(scope="app")
@@ -2500,7 +2538,13 @@ def main() -> None:
                 selected_treatment_id = treatment_options[selected_treatment_label]
                 selected_treatment = treatments_df[treatments_df["id"] == selected_treatment_id].iloc[0]
 
+                delete_action = f"legacy_treatment_{selected_treatment_id}"
                 if st.button("Usuń wybrany zabieg", key="delete_selected_treatment"):
+                    st.session_state.pending_delete_action = delete_action
+                if _delete_confirmation(
+                    delete_action,
+                    f"zabieg z dnia {selected_treatment['treatment_date']} ({selected_treatment['field_name']})",
+                ):
                     delete_treatment(selected_treatment_id)
                     st.success("Zabieg usunięty")
                     st.rerun()
