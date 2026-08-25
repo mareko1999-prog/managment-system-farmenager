@@ -68,6 +68,10 @@ class _ConnectionHandle:
         self._conn.commit()
         self._dirty = False
 
+    def sync(self) -> None:
+        """Ręcznie synchronizuje embedded replica z bazą Turso."""
+        self._conn.sync()
+
     def rollback(self) -> None:
         """Wycofuje zapisane w bieżącej transakcji zmiany."""
         self._conn.rollback()

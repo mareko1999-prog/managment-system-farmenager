@@ -1634,6 +1634,9 @@ def save_treatments(
                     ),
                 )
         conn.commit()
+        if hasattr(conn, "sync"):
+            conn.sync()
+    _clear_data_cache()
     return inserted_treatments
 
 
