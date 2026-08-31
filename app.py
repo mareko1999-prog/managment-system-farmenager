@@ -5,6 +5,7 @@ import math
 import os
 import re
 import time
+from urllib import parse, request
 from uuid import uuid4
 from datetime import date
 from typing import Any, Optional
@@ -1330,6 +1331,192 @@ def sor_product_exists(name: str) -> bool:
     if df.empty or "name" not in df.columns:
         return False
     return not df[df["name"].astype(str).str.lower() == name.lower()].empty
+
+
+def _get_gemini_config() -> tuple[str, str]:
+    api_key = ""
+    try:
+        if hasattr(st, "secrets"):
+            api_key = str(st.secrets.get("GEMINI_API_KEY", "") or "").strip()
+    except Exception:
+        api_key = ""
+    if not api_key:
+        api_key = str(os.environ.get("GEMINI_API_KEY", "") or "").strip()
+
+    model_name = ""
+    try:
+        if hasattr(st, "secrets"):
+            model_name = str(st.secrets.get("GEMINI_MODEL", "") or "").strip()
+    except Exception:
+        model_name = ""
+    if not model_name:
+        model_name = str(os.environ.get("GEMINI_MODEL", "") or "").strip()
+    if not model_name:
+        model_name = "gemini-2.5-flash"
+    return api_key, model_name
+
+
+def _get_google_search_config() -> tuple[str, str]:
+    api_key = ""
+    try:
+        if hasattr(st, "secrets"):
+            api_key = str(st.secrets.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
+    except Exception:
+        api_key = ""
+    if not api_key:
+        api_key = str(os.environ.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
+
+    engine_id = ""
+    try:
+        if hasattr(st, "secrets"):
+            engine_id = str(st.secrets.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
+    except Exception:
+        engine_id = ""
+    if not engine_id:
+        engine_id = str(os.environ.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
+    return api_key, engine_id
+
+
+def _google_search(query: str, max_results: int = 5) -> list[str]:
+    api_key, engine_id = _get_google_search_config()
+    if not api_key or not engine_id:
+        return []
+
+    params = parse.urlencode({
+        "key": api_key,
+        "cx": engine_id,
+        "q": query,
+        "num": max_results,
+    })
+    url = f"https://www.googleapis.com/customsearch/v1?{params}"
+    try:
+        with request.urlopen(url, timeout=20) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    items = payload.get("items") or []
+    search_results = []
+    for item in items:
+        title = str(item.get("title") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+        link = str(item.get("link") or "").strip()
+        if title or snippet or link:
+            parts = [part for part in [title, snippet, link] if part]
+            search_results.append(" | ".join(parts))
+    return search_results
+
+
+def _extract_json_from_text(raw_text: str) -> dict:
+    text = str(raw_text or "").strip()
+    if not text:
+        return {"overall_status": "unknown", "summary": "Brak odpowiedzi modelu AI.", "checks": []}
+
+    if "```" in text:
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, flags=re.S | re.I)
+        if fenced:
+            text = fenced.group(1)
+
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", text, flags=re.S)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except json.JSONDecodeError:
+                pass
+
+    return {"overall_status": "unknown", "summary": text[:500], "checks": []}
+
+
+def analyze_sor_row_with_gemini(
+    product_name: str,
+    crop_name: str,
+    dose: Any,
+    application_date: Any,
+    sor_notes: Any,
+) -> dict:
+    api_key, model_name = _get_gemini_config()
+    if not api_key:
+        return {
+            "overall_status": "unknown",
+            "summary": "Brak klucza GEMINI_API_KEY w secrets lub środowisku.",
+            "checks": [],
+            "row_color": "none",
+        }
+
+    try:
+        import google.generativeai as genai
+    except ImportError:
+        return {
+            "overall_status": "unknown",
+            "summary": "Brak biblioteki google-generativeai. Zainstaluj zależność.",
+            "checks": [],
+            "row_color": "none",
+        }
+
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
+        search_results = _google_search(search_query, max_results=5)
+        search_context = "\n".join(search_results) if search_results else "Brak wyników wyszukiwania Google dla etykiety produktu."
+
+        prompt = f"""
+Jesteś ekspertem ds. ochrony roślin i zgodności z etykietą środków ochrony roślin.
+
+Wykonaj osobny krok wyszukiwania w Google Search i użyj znalezionych wyników jako źródła informacji o etykiecie środka.
+Dokładnie przeanalizuj wyniki wyszukiwania, a następnie oceń zgodność środka z etykietą.
+
+Wyniki Google Search:
+{search_context}
+
+Dane wejściowe:
+- nazwa środka: {product_name or 'brak'}
+- uprawa: {crop_name or 'brak'}
+- dawka zastosowana: {dose if dose is not None else 'brak'}
+- data zastosowania: {application_date if application_date is not None else 'brak'}
+- okres zużycia zapasów z notes: {sor_notes if sor_notes is not None else 'brak'}
+
+Wymagania:
+1. Użyj wyników Google Search jako źródła etykiety produktu i sprawdź, czy środek jest dopuszczony do stosowania na tej uprawie zgodnie z etykietą.
+2. Sprawdź, czy zastosowana dawka nie przekracza dawki maksymalnej z etykiety.
+3. Porównaj datę zastosowania z okresem zużycia zapasów zapisanym w notes. Jeśli data zastosowania jest wcześniejsza niż okres zużycia zapasów, stan jest zgodny. Jeśli jest później, stan jest niezgodny.
+4. Zwróć wynik wyłącznie jako JSON zgodny ze schematem:
+{{
+  "overall_status": "compliant" | "non_compliant" | "unknown",
+  "summary": "krótki opis",
+  "checks": [
+    {{"name": "crop_compatibility", "status": "pass" | "fail" | "unknown", "reason": "..."}},
+    {{"name": "dose_compliance", "status": "pass" | "fail" | "unknown", "reason": "..."}},
+    {{"name": "stock_usage_window", "status": "pass" | "fail" | "unknown", "reason": "..."}}
+  ],
+  "row_color": "red" | "none"
+}}
+5. Jeśli nie ma wystarczających danych, wpisz "unknown" i krótko uzasadnij, dlaczego.
+6. Nie zgaduj. Jeśli wyników wyszukiwania jest mało, napisz to w summary i ustaw "unknown" zamiast fałszywie potwierdzać zgodność.
+"""
+        response = model.generate_content(prompt, generation_config={"temperature": 0})
+        payload = _extract_json_from_text(getattr(response, "text", str(response)))
+        if not isinstance(payload, dict):
+            payload = {"overall_status": "unknown", "summary": "Błąd parsowania odpowiedzi modelu.", "checks": [], "row_color": "none"}
+        if payload.get("overall_status") == "non_compliant":
+            payload["row_color"] = "red"
+        else:
+            payload["row_color"] = "none"
+        if "checks" not in payload or not isinstance(payload["checks"], list):
+            payload["checks"] = []
+        if "summary" not in payload or not payload["summary"]:
+            payload["summary"] = "Analiza AI zakończona."
+        return payload
+    except Exception as exc:
+        return {
+            "overall_status": "unknown",
+            "summary": f"Błąd połączenia z Gemini: {exc}",
+            "checks": [],
+            "row_color": "none",
+        }
 
 
 def import_sor_product(row: pd.Series) -> bool:
@@ -3736,7 +3923,68 @@ def main() -> None:
                         )
                         ordered_columns = ["nr działki", "kategoria", "zastosowany produkt", "data", "dawka", "powierzchnia", "uprawa", "sezon"]
                         sor_registry_display_df = sor_registry_display_df[[col for col in ordered_columns if col in sor_registry_display_df.columns]].copy()
-                        st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
+
+                        @st.dialog("Uzasadnienie niezgodności AI")
+                        def show_ai_noncompliance_dialog(reasons: list[dict]) -> None:
+                            for item in reasons:
+                                st.markdown(f"### {item.get('zastosowany produkt', 'Produkt')}")
+                                st.markdown(item.get("uzasadnienie", "Brak uzasadnienia."))
+                                st.caption(f"Status: {item.get('status', 'unknown')}")
+                                st.divider()
+
+                        if st.button("Uruchom analizę AI", key="run_sor_ai_analysis"):
+                            ai_rows = []
+                            non_compliance_rows = []
+                            for _, row in sor_registry_report_df.iterrows():
+                                product_name = str(row.get("product_name") or "").strip()
+                                crop_name = str(row.get("uprawa") or "").strip()
+                                dose_value = row.get("dose")
+                                date_value = row.get("treatment_date")
+                                notes_value = ""
+                                if "notes" in treatments_df.columns:
+                                    matching_rows = treatments_df[
+                                        (treatments_df["field_id"].astype(str) == str(row.get("field_id")))
+                                        & (treatments_df["treatment_date"].astype(str) == str(date_value))
+                                    ]
+                                    if not matching_rows.empty:
+                                        notes_value = str(matching_rows.iloc[0].get("notes") or "")
+                                analysis = analyze_sor_row_with_gemini(
+                                    product_name=product_name,
+                                    crop_name=crop_name,
+                                    dose=dose_value,
+                                    application_date=date_value,
+                                    sor_notes=notes_value,
+                                )
+                                ai_row = {
+                                    "status": str(analysis.get("overall_status", "unknown")).strip(),
+                                    "uzasadnienie": str(analysis.get("summary", "Brak uzasadnienia.")),
+                                    "zastosowany produkt": product_name,
+                                }
+                                ai_rows.append(ai_row)
+                                if str(analysis.get("overall_status", "unknown")).lower() == "non_compliant":
+                                    non_compliance_rows.append(ai_row)
+
+                            ai_display_df = sor_registry_display_df.copy()
+                            ai_display_df["status AI"] = [item["status"] for item in ai_rows]
+                            ai_display_df["uzasadnienie AI"] = [item["uzasadnienie"] for item in ai_rows]
+
+                            def _style_sor_ai_rows(row):
+                                status = str(row["status AI"]).lower() if "status AI" in row else "unknown"
+                                if status == "non_compliant":
+                                    return ["background-color: #f8d7da; color: #111111" for _ in row]
+                                if status == "unknown":
+                                    return ["background-color: #fff3cd; color: #111111" for _ in row]
+                                return ["background-color: #d4edda; color: #111111" for _ in row]
+
+                            styled = ai_display_df.style.apply(_style_sor_ai_rows, axis=1)
+                            st.dataframe(styled, use_container_width=True, hide_index=True, hidden_columns=["status AI", "uzasadnienie AI"])
+
+                            if non_compliance_rows:
+                                show_ai_noncompliance_dialog(non_compliance_rows)
+                            else:
+                                st.success("Analiza AI: brak niezgodności w oparciu o etykietę, dawkę i okres zużycia zapasów.")
+                        else:
+                            st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
 
                         sor_registry_export_df = sor_registry_report_df.copy()
                         sor_registry_export_df = sor_registry_export_df.rename(columns={
