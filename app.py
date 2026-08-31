@@ -1438,20 +1438,20 @@ def analyze_sor_row_with_gemini(
         }
 
     try:
-        import google.generativeai as genai
+        from google import genai
+        from google.genai import types
     except ImportError:
-        logs.append("[ERROR] Brak biblioteki google-generativeai")
+        logs.append("[ERROR] Brak biblioteki google-genai")
         return {
             "overall_status": "unknown",
-            "summary": "Brak biblioteki google-generativeai. Zainstaluj zależność.",
+            "summary": "Brak biblioteki google-genai. Zainstaluj zależność: pip install google-genai",
             "checks": [],
             "debug_logs": logs,
         }
 
     try:
         logs.append(f"[INFO] Konfiguracja Gemini z modelem: {model_name}")
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
+        client = genai.Client(api_key=api_key)
         
         search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
         logs.append(f"[INFO] Wyszukiwanie: {search_query}")
@@ -1502,7 +1502,11 @@ WAŻNE:
 - Nie dodawaj żadnego tekstu poza JSON.
 """
         logs.append("[INFO] Wysyłanie promptu do Gemini...")
-        response = model.generate_content(prompt, generation_config={"temperature": 0})
+        response = client.models.generate_content(
+            model=model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.0)
+        )
         response_text = getattr(response, "text", str(response))
         logs.append(f"[INFO] Odpowiedź Gemini (pierwsze 200 znaków): {response_text[:200]}")
         
