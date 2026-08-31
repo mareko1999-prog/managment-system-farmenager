@@ -195,6 +195,7 @@ def test_treatment_registry_groups_same_rows_by_date_crop_product_and_dose():
         plots_df,
         app.pd.DataFrame(),
         treatments_df,
+        group_fields=True,
     )
 
     assert len(report_df) == 1
@@ -202,6 +203,16 @@ def test_treatment_registry_groups_same_rows_by_date_crop_product_and_dose():
     assert report_df.iloc[0]["area_ha"] == 4.0
     assert report_df.iloc[0]["product_name"] == "Herbicyd A"
     assert report_df.iloc[0]["dose"] == 1.0
+
+    ungrouped_df = app.build_treatment_registry_report(
+        7,
+        "2026",
+        farms_df,
+        plots_df,
+        app.pd.DataFrame(),
+        treatments_df,
+    )
+    assert len(ungrouped_df) == 2
 
 
 def test_replace_treatment_batch_rolls_back_when_replacement_fails(monkeypatch):

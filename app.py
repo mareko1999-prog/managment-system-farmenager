@@ -1074,6 +1074,7 @@ def build_treatment_registry_report(
     fields_df: pd.DataFrame,
     treatments_df: pd.DataFrame,
     category_filter: Optional[str] = None,
+    group_fields: bool = False,
 ) -> pd.DataFrame:
     required_columns = {"field_id", "season"}
     if treatments_df.empty or plots_df.empty or farms_df.empty:
@@ -1140,17 +1141,19 @@ def build_treatment_registry_report(
     if report_df.empty:
         return report_df
 
-    group_cols = ["treatment_date", "season", "uprawa", "product_category", "product_name", "dose"]
-    grouped_df = (
-        report_df.groupby(group_cols, dropna=False, as_index=False)
-        .agg(
-            plot_name=("plot_name", lambda values: ", ".join(str(value) for value in dict.fromkeys(values) if str(value).strip())),
-            area_ha=("area_ha", "sum"),
+    if group_fields:
+        group_cols = ["treatment_date", "season", "uprawa", "product_category", "product_name", "dose"]
+        return (
+            report_df.groupby(group_cols, dropna=False, as_index=False)
+            .agg(
+                plot_name=("plot_name", lambda values: ", ".join(str(value) for value in dict.fromkeys(values) if str(value).strip())),
+                area_ha=("area_ha", "sum"),
+            )
+            .sort_values(by=["treatment_date", "uprawa", "product_name", "dose"], kind="stable")
+            .reset_index(drop=True)
         )
-        .sort_values(by=["treatment_date", "uprawa", "product_name", "dose"], kind="stable")
-        .reset_index(drop=True)
-    )
-    return grouped_df
+
+    return report_df
 
 
 def build_product_consumption_report(
@@ -3645,6 +3648,8 @@ def main() -> None:
                         key="registry_season",
                     )
 
+                registry_group_fields = st.checkbox("Grupuj działki", key="registry_group_fields", value=False)
+
                 if st.button("Generuj ewidencję zabiegów", key="generate_registry_report"):
                     registry_report_df = build_treatment_registry_report(
                         selected_report_farm_id,
@@ -3653,6 +3658,7 @@ def main() -> None:
                         plots_df,
                         fields_df,
                         treatments_df,
+                        group_fields=registry_group_fields,
                     )
                     st.markdown("### Wyniki ewidencji zabiegów")
                     if registry_report_df.empty:
@@ -3670,11 +3676,25 @@ def main() -> None:
                                 "area_ha": "powierzchnia",
                             }
                         )
+                        ordered_columns = ["nr działki", "kategoria", "zastosowany produkt", "data", "dawka", "powierzchnia", "uprawa", "sezon"]
+                        registry_display_df = registry_display_df[[col for col in ordered_columns if col in registry_display_df.columns]].copy()
                         st.dataframe(registry_display_df, use_container_width=True, hide_index=True)
 
+                        registry_export_df = registry_report_df.copy()
+                        registry_export_df = registry_export_df.rename(columns={
+                            "plot_name": "nr działki",
+                            "product_category": "kategoria",
+                            "product_name": "zastosowany produkt",
+                            "treatment_date": "data",
+                            "dose": "dawka",
+                            "area_ha": "powierzchnia",
+                            "uprawa": "uprawa",
+                            "season": "sezon",
+                        })
+                        registry_export_df = registry_export_df[[col for col in ordered_columns if col in registry_export_df.columns]].copy()
                         st.download_button(
                             "Eksportuj ewidencję zabiegów do XLSX",
-                            data=to_excel_bytes(registry_report_df),
+                            data=to_excel_bytes(registry_export_df),
                             file_name="ewidencja_zabiegow.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="download_registry_report",
@@ -3689,6 +3709,7 @@ def main() -> None:
                         fields_df,
                         treatments_df,
                         category_filter="ŚOR",
+                        group_fields=registry_group_fields,
                     )
                     st.markdown("### Wyniki ewidencji ŚOR")
                     if sor_registry_report_df.empty:
@@ -3706,10 +3727,25 @@ def main() -> None:
                                 "area_ha": "powierzchnia",
                             }
                         )
+                        ordered_columns = ["nr działki", "kategoria", "zastosowany produkt", "data", "dawka", "powierzchnia", "uprawa", "sezon"]
+                        sor_registry_display_df = sor_registry_display_df[[col for col in ordered_columns if col in sor_registry_display_df.columns]].copy()
                         st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
+
+                        sor_registry_export_df = sor_registry_report_df.copy()
+                        sor_registry_export_df = sor_registry_export_df.rename(columns={
+                            "plot_name": "nr działki",
+                            "product_category": "kategoria",
+                            "product_name": "zastosowany produkt",
+                            "treatment_date": "data",
+                            "dose": "dawka",
+                            "area_ha": "powierzchnia",
+                            "uprawa": "uprawa",
+                            "season": "sezon",
+                        })
+                        sor_registry_export_df = sor_registry_export_df[[col for col in ordered_columns if col in sor_registry_export_df.columns]].copy()
                         st.download_button(
                             "Eksportuj ewidencję ŚOR do XLSX",
-                            data=to_excel_bytes(sor_registry_report_df),
+                            data=to_excel_bytes(sor_registry_export_df),
                             file_name="ewidencja_sor.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                             key="download_sor_registry_report",
