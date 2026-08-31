@@ -1437,30 +1437,44 @@ def analyze_sor_row_with_gemini(
     application_date: Any,
     sor_notes: Any,
 ) -> dict:
+    logs = []
     api_key, model_name = _get_gemini_config()
     if not api_key:
+        logs.append("[ERROR] Brak klucza GEMINI_API_KEY")
         return {
             "overall_status": "unknown",
             "summary": "Brak klucza GEMINI_API_KEY w secrets lub środowisku.",
             "checks": [],
-            "row_color": "none",
+            "debug_logs": logs,
         }
 
     try:
         import google.generativeai as genai
     except ImportError:
+        logs.append("[ERROR] Brak biblioteki google-generativeai")
         return {
             "overall_status": "unknown",
             "summary": "Brak biblioteki google-generativeai. Zainstaluj zależność.",
             "checks": [],
-            "row_color": "none",
+            "debug_logs": logs,
         }
 
     try:
+        logs.append(f"[INFO] Konfiguracja Gemini z modelem: {model_name}")
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel(model_name)
+        
         search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
+        logs.append(f"[INFO] Wyszukiwanie: {search_query}")
+        
         search_results = _google_search(search_query, max_results=5)
+        logs.append(f"[INFO] Wyniki Google Search: {len(search_results)} rezultatów")
+        if search_results:
+            for i, result in enumerate(search_results[:2], 1):
+                logs.append(f"[SEARCH {i}] {result[:100]}...")
+        else:
+            logs.append("[WARN] Brak wyników wyszukiwania")
+        
         search_context = "\n".join(search_results) if search_results else "Brak wyników wyszukiwania Google dla etykiety produktu."
 
         prompt = f"""
@@ -1498,25 +1512,36 @@ WAŻNE:
 - Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
 - Nie dodawaj żadnego tekstu poza JSON.
 """
+        logs.append("[INFO] Wysyłanie promptu do Gemini...")
         response = model.generate_content(prompt, generation_config={"temperature": 0})
-        payload = _extract_json_from_text(getattr(response, "text", str(response)))
+        response_text = getattr(response, "text", str(response))
+        logs.append(f"[INFO] Odpowiedź Gemini (pierwsze 200 znaków): {response_text[:200]}")
+        
+        payload = _extract_json_from_text(response_text)
+        logs.append(f"[INFO] Parsowany JSON: {payload}")
+        
         if not isinstance(payload, dict):
-            payload = {"overall_status": "unknown", "summary": "Błąd parsowania odpowiedzi modelu.", "checks": [], "row_color": "none"}
-        if payload.get("overall_status") == "non_compliant":
-            payload["row_color"] = "red"
-        else:
-            payload["row_color"] = "none"
+            logs.append("[ERROR] Payload nie jest słownikiem")
+            payload = {"overall_status": "unknown", "summary": "Błąd parsowania odpowiedzi modelu.", "checks": [], "debug_logs": logs}
+        
+        payload["debug_logs"] = logs
+        
         if "checks" not in payload or not isinstance(payload["checks"], list):
             payload["checks"] = []
         if "summary" not in payload or not payload["summary"]:
             payload["summary"] = "Analiza AI zakończona."
+        
+        logs.append(f"[INFO] Final status: {payload.get('overall_status')}")
         return payload
     except Exception as exc:
+        logs.append(f"[ERROR] Wyjątek: {str(exc)}")
+        import traceback
+        logs.append(f"[TRACEBACK] {traceback.format_exc()}")
         return {
             "overall_status": "unknown",
             "summary": f"Błąd połączenia z Gemini: {exc}",
             "checks": [],
-            "row_color": "none",
+            "debug_logs": logs,
         }
 
 
@@ -3965,6 +3990,7 @@ def main() -> None:
                                 "status": str(analysis.get("overall_status", "unknown")).strip(),
                                 "uzasadnienie": str(analysis.get("summary", "Brak uzasadnienia.")),
                                 "zastosowany produkt": product_name,
+                                "debug_logs": analysis.get("debug_logs", []),
                             }
                             ai_rows.append(ai_row)
                             if str(analysis.get("overall_status", "unknown")).lower() == "non_compliant":
@@ -3979,16 +4005,6 @@ def main() -> None:
 
                     ai_rows = st.session_state.get("sor_registry_ai_rows", [])
                     if ai_rows:
-                        st.markdown("#### Legenda kolorów analizy AI:")
-                        col1, col2, col3 = st.columns(3)
-                        with col1:
-                            st.markdown("<span style='background-color: #d4edda; padding: 5px;'>🟢 ZGODNE</span>", unsafe_allow_html=True)
-                        with col2:
-                            st.markdown("<span style='background-color: #f8d7da; padding: 5px;'>🔴 NIEZGODNE</span>", unsafe_allow_html=True)
-                        with col3:
-                            st.markdown("<span style='background-color: #e2e3e5; padding: 5px;'>⚪ BRAK ANALIZY</span>", unsafe_allow_html=True)
-                        st.divider()
-                        
                         ai_status_map = {item["zastosowany produkt"]: item["status"] for item in ai_rows}
                         ai_display_df = sor_registry_display_df.copy()
 
@@ -4003,6 +4019,16 @@ def main() -> None:
 
                         styled = ai_display_df.style.apply(_style_sor_ai_rows, axis=1)
                         st.dataframe(styled, use_container_width=True, hide_index=True)
+                        
+                        st.markdown("#### Logi analizy AI")
+                        for ai_row in ai_rows:
+                            with st.expander(f"{ai_row['zastosowany produkt']} - {ai_row['status']}"):
+                                st.write(f"**Status:** {ai_row['status']}")
+                                st.write(f"**Uzasadnienie:** {ai_row['uzasadnienie']}")
+                                if ai_row.get("debug_logs"):
+                                    st.write("**Debug logi:**")
+                                    for log in ai_row["debug_logs"]:
+                                        st.code(log, language="text")
                     else:
                         st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
 
