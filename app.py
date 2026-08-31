@@ -1342,6 +1342,14 @@ def _get_openai_config() -> tuple[str, str]:
     if not api_key:
         api_key = str(os.environ.get("OPENAI_API_KEY", "") or "").strip()
     
+    # Czyszczenie z złego formatu (nawiasy, słowniki, itp.)
+    if api_key.startswith('{'):
+        # Próba wyciągnięcia wartości z {'OPENAI_API_KEY': 'sk-...'}
+        import re
+        match = re.search(r"'sk-[^']*'|\"sk-[^\"]*\"", api_key)
+        if match:
+            api_key = match.group(0).strip("'\"")
+    
     model_name = str(st.secrets.get("OPENAI_MODEL", "") or "").strip()
     if not model_name:
         model_name = str(os.environ.get("OPENAI_MODEL", "") or "").strip()
@@ -1452,6 +1460,23 @@ def analyze_sor_row_with_openai(
         logs.append(f"[INFO] Konfiguracja OpenAI z modelem: {model_name}")
         logs.append(f"[INFO] Klucz API długość: {len(api_key)}, typ: {type(api_key).__name__}")
         logs.append(f"[INFO] Klucz zaczyna się od: {api_key[:10] if api_key else 'BRAK'}")
+        
+        # Walidacja formatu klucza
+        if api_key.startswith('{') or api_key.startswith('['):
+            logs.append("[ERROR] Klucz ma format TOML/JSON zamiast czystej wartości!")
+            logs.append("[ERROR] Upewnij się, że w Streamlit Secrets wklejono TYLKO wartość bez nawiasów")
+            logs.append("[ERROR] Prawidłowo: OPENAI_API_KEY = \"sk-proj-xxxx\"")
+            logs.append(f"[ERROR] Otrzymano: {api_key[:100]}")
+            return {
+                "overall_status": "unknown",
+                "summary": "Błąd konfiguracji klucza API - format TOML/JSON zamiast czystej wartości. Sprawdź Streamlit Secrets.",
+                "checks": [],
+                "debug_logs": logs,
+            }
+        
+        if not api_key.startswith('sk-'):
+            logs.append("[ERROR] Klucz nie zaczyna się od sk- ! Może to być zły klucz.")
+            logs.append(f"[ERROR] Otrzymano prefiks: {api_key[:20]}")
         
         # Inicjalizacja klienta OpenAI
         client = OpenAI(api_key=api_key)
