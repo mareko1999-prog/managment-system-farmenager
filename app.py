@@ -1337,36 +1337,33 @@ def _get_gemini_config() -> tuple[str, str]:
     api_key = ""
     model_name = "gemini-2.5-flash"  # Wartość domyślna
     
-    # Najpierw sprawdzamy Streamlit Secrets
-    if "GEMINI_API_KEY" in st.secrets:
-        api_key = st.secrets["GEMINI_API_KEY"]
-    # Fallback na zmienne środowiskowe
-    elif "GEMINI_API_KEY" in os.environ:
-        api_key = os.environ["GEMINI_API_KEY"]
+    # Najpierw sprawdzamy Streamlit Secrets (bezpiecznie z .get())
+    api_key = str(st.secrets.get("GEMINI_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.environ.get("GEMINI_API_KEY", "") or "").strip()
+    
+    model_name = str(st.secrets.get("GEMINI_MODEL", "") or "").strip()
+    if not model_name:
+        model_name = str(os.environ.get("GEMINI_MODEL", "") or "").strip()
+    if not model_name:
+        model_name = "gemini-2.5-flash"
         
-    if "GEMINI_MODEL" in st.secrets:
-        model_name = st.secrets["GEMINI_MODEL"]
-    elif "GEMINI_MODEL" in os.environ:
-        model_name = os.environ["GEMINI_MODEL"]
-        
-    return api_key.strip(), model_name.strip()
+    return api_key, model_name
 
 
 def _get_google_search_config() -> tuple[str, str]:
     api_key = ""
     engine_id = ""
     
-    if "GOOGLE_SEARCH_API_KEY" in st.secrets:
-        api_key = st.secrets["GOOGLE_SEARCH_API_KEY"]
-    elif "GOOGLE_SEARCH_API_KEY" in os.environ:
-        api_key = os.environ["GOOGLE_SEARCH_API_KEY"]
+    api_key = str(st.secrets.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.environ.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
+    
+    engine_id = str(st.secrets.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
+    if not engine_id:
+        engine_id = str(os.environ.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
         
-    if "GOOGLE_SEARCH_ENGINE_ID" in st.secrets:
-        engine_id = st.secrets["GOOGLE_SEARCH_ENGINE_ID"]
-    elif "GOOGLE_SEARCH_ENGINE_ID" in os.environ:
-        engine_id = os.environ["GOOGLE_SEARCH_ENGINE_ID"]
-        
-    return api_key.strip(), engine_id.strip()
+    return api_key, engine_id
 
 
 def _google_search(query: str, max_results: int = 5) -> list[str]:
