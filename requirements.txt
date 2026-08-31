@@ -6,4 +6,5 @@ PyJWT>=2.0.0
 bcrypt>=4.0.0
 toml>=0.10.2
 libsql>=0.1.8
-streamlit-keyup>=0.2.4google-generativeai>=0.8.0
+streamlit-keyup>=0.2.4
+google-generativeai>=0.8.0
