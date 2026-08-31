@@ -215,6 +215,69 @@ def test_treatment_registry_groups_same_rows_by_date_crop_product_and_dose():
     assert len(ungrouped_df) == 2
 
 
+def test_treatment_registry_scales_area_when_treatment_area_differs_from_field_area():
+    farms_df = app.pd.DataFrame([{"id": 7, "name": "Gospodarstwo A"}])
+    plots_df = app.pd.DataFrame([
+        {"farm_name": "Gospodarstwo A", "field_id": 10, "name": "10", "area_ha": 3.0},
+        {"farm_name": "Gospodarstwo A", "field_id": 10, "name": "11", "area_ha": 7.0},
+    ])
+    treatments_df = app.pd.DataFrame([
+        {
+            "field_id": 10,
+            "season": "2026",
+            "treatment_date": "2026-08-10",
+            "crop_name": "Pszenica",
+            "product_category": "ŚOR",
+            "product_name": "Herbicyd A",
+            "dose": 1.0,
+            "area_ha": 6.0,
+            "notes": "",
+            "products_json": '[{"product_name": "Herbicyd A", "dose": 1.0, "category": "ŚOR"}]',
+        }
+    ])
+
+    report_df = app.build_treatment_registry_report(
+        7,
+        "2026",
+        farms_df,
+        plots_df,
+        app.pd.DataFrame(),
+        treatments_df,
+        group_fields=True,
+    )
+
+    assert len(report_df) == 1
+    assert report_df.iloc[0]["plot_name"] == "10, 11"
+    assert abs(report_df.iloc[0]["area_ha"] - 6.0) < 1e-9
+
+    treatment_row = app.pd.DataFrame([
+        {
+            "field_id": 10,
+            "season": "2026",
+            "treatment_date": "2026-08-10",
+            "crop_name": "Pszenica",
+            "product_category": "ŚOR",
+            "product_name": "Herbicyd A",
+            "dose": 1.0,
+            "area_ha": 6.0,
+            "notes": "",
+            "products_json": '[{"product_name": "Herbicyd A", "dose": 1.0, "category": "ŚOR"}]',
+        }
+    ])
+    report_rows = app.build_treatment_registry_report(
+        7,
+        "2026",
+        farms_df,
+        plots_df,
+        app.pd.DataFrame(),
+        treatment_row,
+        group_fields=False,
+    )
+    assert len(report_rows) == 2
+    assert abs(report_rows.iloc[0]["area_ha"] - 3.0 * (6.0 / 10.0)) < 1e-9
+    assert abs(report_rows.iloc[1]["area_ha"] - 7.0 * (6.0 / 10.0)) < 1e-9
+
+
 def test_replace_treatment_batch_rolls_back_when_replacement_fails(monkeypatch):
     conn = sqlite3.connect(":memory:")
     _setup_schema(conn)

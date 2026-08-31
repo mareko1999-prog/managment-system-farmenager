@@ -1,6 +1,7 @@
 import io
 import importlib
 import json
+import math
 import os
 import re
 import time
@@ -1114,9 +1115,15 @@ def build_treatment_registry_report(
                 "dose": treatment.get("dose") or 0.0,
             }]
 
+        total_field_area = float(plot_rows["area_ha"].sum()) if not plot_rows.empty else 0.0
+        treatment_area = float(treatment.get("area_ha") or 0.0)
+        area_ratio = 1.0
+        if total_field_area > 0 and treatment_area > 0 and not math.isclose(treatment_area, total_field_area, rel_tol=1e-9, abs_tol=1e-9):
+            area_ratio = treatment_area / total_field_area
+
         for _, plot_row in plot_rows.iterrows():
             plot_name = plot_row["name"]
-            plot_area = float(plot_row["area_ha"] or 0.0)
+            plot_area = float(plot_row["area_ha"] or 0.0) * area_ratio
             crop_name = treatment.get("crop_name") or ""
             for product in products:
                 rows.append(
