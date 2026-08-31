@@ -1136,7 +1136,21 @@ def build_treatment_registry_report(
         return report_df
     if category_filter:
         report_df = report_df[report_df["product_category"] == category_filter].copy()
-    return report_df
+
+    if report_df.empty:
+        return report_df
+
+    group_cols = ["treatment_date", "season", "uprawa", "product_category", "product_name", "dose"]
+    grouped_df = (
+        report_df.groupby(group_cols, dropna=False, as_index=False)
+        .agg(
+            plot_name=("plot_name", lambda values: ", ".join(str(value) for value in dict.fromkeys(values) if str(value).strip())),
+            area_ha=("area_ha", "sum"),
+        )
+        .sort_values(by=["treatment_date", "uprawa", "product_name", "dose"], kind="stable")
+        .reset_index(drop=True)
+    )
+    return grouped_df
 
 
 def build_product_consumption_report(
