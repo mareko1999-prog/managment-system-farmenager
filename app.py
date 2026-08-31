@@ -1333,20 +1333,20 @@ def sor_product_exists(name: str) -> bool:
     return not df[df["name"].astype(str).str.lower() == name.lower()].empty
 
 
-def _get_gemini_config() -> tuple[str, str]:
+def _get_openai_config() -> tuple[str, str]:
     api_key = ""
-    model_name = "gemini-2.5-flash"  # Wartość domyślna
+    model_name = "gpt-4o-mini"  # Wartość domyślna
     
     # Najpierw sprawdzamy Streamlit Secrets (bezpiecznie z .get())
-    api_key = str(st.secrets.get("GEMINI_API_KEY", "") or "").strip()
+    api_key = str(st.secrets.get("OPENAI_API_KEY", "") or "").strip()
     if not api_key:
-        api_key = str(os.environ.get("GEMINI_API_KEY", "") or "").strip()
+        api_key = str(os.environ.get("OPENAI_API_KEY", "") or "").strip()
     
-    model_name = str(st.secrets.get("GEMINI_MODEL", "") or "").strip()
+    model_name = str(st.secrets.get("OPENAI_MODEL", "") or "").strip()
     if not model_name:
-        model_name = str(os.environ.get("GEMINI_MODEL", "") or "").strip()
+        model_name = str(os.environ.get("OPENAI_MODEL", "") or "").strip()
     if not model_name:
-        model_name = "gemini-2.5-flash"
+        model_name = "gpt-4o-mini"
         
     return api_key, model_name
 
@@ -1419,7 +1419,7 @@ def _extract_json_from_text(raw_text: str) -> dict:
     return {"overall_status": "unknown", "summary": text[:500], "checks": []}
 
 
-def analyze_sor_row_with_gemini(
+def analyze_sor_row_with_openai(
     product_name: str,
     crop_name: str,
     dose: Any,
@@ -1427,36 +1427,35 @@ def analyze_sor_row_with_gemini(
     sor_notes: Any,
 ) -> dict:
     logs = []
-    api_key, model_name = _get_gemini_config()
+    api_key, model_name = _get_openai_config()
     if not api_key:
-        logs.append("[ERROR] Brak klucza GEMINI_API_KEY")
+        logs.append("[ERROR] Brak klucza OPENAI_API_KEY")
         return {
             "overall_status": "unknown",
-            "summary": "Brak klucza GEMINI_API_KEY w secrets lub środowisku.",
+            "summary": "Brak klucza OPENAI_API_KEY w secrets lub środowisku.",
             "checks": [],
             "debug_logs": logs,
         }
 
     try:
-        from google import genai
-        from google.genai import types
+        from openai import OpenAI
     except ImportError:
-        logs.append("[ERROR] Brak biblioteki google-genai")
+        logs.append("[ERROR] Brak biblioteki openai")
         return {
             "overall_status": "unknown",
-            "summary": "Brak biblioteki google-genai. Zainstaluj zależność: pip install google-genai",
+            "summary": "Brak biblioteki openai. Zainstaluj zależność: pip install openai",
             "checks": [],
             "debug_logs": logs,
         }
 
     try:
-        logs.append(f"[INFO] Konfiguracja Gemini z modelem: {model_name}")
+        logs.append(f"[INFO] Konfiguracja OpenAI z modelem: {model_name}")
         logs.append(f"[INFO] Klucz API długość: {len(api_key)}, typ: {type(api_key).__name__}")
         logs.append(f"[INFO] Klucz zaczyna się od: {api_key[:10] if api_key else 'BRAK'}")
         
-        # Jawne przekazanie klucza AQ. do klienta genai
-        client = genai.Client(api_key=api_key)
-        logs.append("[INFO] Klient Gemini zainicjalizowany")
+        # Inicjalizacja klienta OpenAI
+        client = OpenAI(api_key=api_key)
+        logs.append("[INFO] Klient OpenAI zainicjalizowany")
         
         search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
         logs.append(f"[INFO] Wyszukiwanie: {search_query}")
@@ -1506,17 +1505,20 @@ WAŻNE:
 - Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
 - Nie dodawaj żadnego tekstu poza JSON.
 """
-        logs.append("[INFO] Wysyłanie promptu do Gemini...")
+        logs.append("[INFO] Wysyłanie promptu do OpenAI...")
         logs.append(f"[INFO] Parametry: model={model_name}, prompt_length={len(prompt)}")
         
-        response = client.models.generate_content(
+        response = client.chat.completions.create(
             model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.0)
+            messages=[
+                {"role": "system", "content": "Jesteś ekspertem ds. ochrony roślin. Odpowiadaj TYLKO w formacie JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.0
         )
-        logs.append("[INFO] Odpowiedź otrzymana z Gemini")
-        response_text = getattr(response, "text", str(response))
-        logs.append(f"[INFO] Odpowiedź Gemini (pierwsze 200 znaków): {response_text[:200]}")
+        logs.append("[INFO] Odpowiedź otrzymana z OpenAI")
+        response_text = response.choices[0].message.content
+        logs.append(f"[INFO] Odpowiedź OpenAI (pierwsze 200 znaków): {response_text[:200]}")
         
         payload = _extract_json_from_text(response_text)
         logs.append(f"[INFO] Parsowany JSON: {payload}")
@@ -1538,18 +1540,18 @@ WAŻNE:
         error_str = str(exc)
         logs.append(f"[ERROR] Wyjątek: {error_str}")
         
-        # Specjalne obsłużenie błędów tokenu AQ.
-        if "API_KEY_INVALID" in error_str or "401" in error_str or "400" in error_str:
+        # Specjalne obsłużenie błędów klucza
+        if "invalid_api_key" in error_str or "401" in error_str:
             logs.append("[ERROR] Problem z kluczem API - sprawdź czy:")
             logs.append("  1. Klucz jest w pełni skopiowany bez spacji")
-            logs.append("  2. Klucz jest formatem AQ.")
-            logs.append("  3. Upłynęło 5-15 minut na propagację nowego klucza")
+            logs.append("  2. Klucz zaczyna się od sk-")
+            logs.append("  3. Klucz ma wystarczającą ilość środków")
         
         import traceback
         logs.append(f"[TRACEBACK] {traceback.format_exc()}")
         return {
             "overall_status": "unknown",
-            "summary": f"Błąd połączenia z Gemini: {exc}",
+            "summary": f"Błąd połączenia z OpenAI: {exc}",
             "checks": [],
             "debug_logs": logs,
         }
@@ -3989,7 +3991,7 @@ def main() -> None:
                                 ]
                                 if not matching_rows.empty:
                                     notes_value = str(matching_rows.iloc[0].get("notes") or "")
-                            analysis = analyze_sor_row_with_gemini(
+                            analysis = analyze_sor_row_with_openai(
                                 product_name=product_name,
                                 crop_name=crop_name,
                                 dose=dose_value,
