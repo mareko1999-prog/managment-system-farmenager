@@ -3905,106 +3905,115 @@ def main() -> None:
                         category_filter="ŚOR",
                         group_fields=registry_group_fields,
                     )
-                    st.markdown("### Wyniki ewidencji ŚOR")
-                    if sor_registry_report_df.empty:
-                        st.info("Brak zabiegów ŚOR dla wybranego gospodarstwa i sezonu.")
-                    else:
-                        sor_registry_display_df = sor_registry_report_df.rename(
-                            columns={
-                                "plot_name": "nr działki",
-                                "treatment_date": "data",
-                                "season": "sezon",
-                                "uprawa": "uprawa",
-                                "product_category": "kategoria",
-                                "product_name": "zastosowany produkt",
-                                "dose": "dawka",
-                                "area_ha": "powierzchnia",
-                            }
-                        )
-                        ordered_columns = ["nr działki", "kategoria", "zastosowany produkt", "data", "dawka", "powierzchnia", "uprawa", "sezon"]
-                        sor_registry_display_df = sor_registry_display_df[[col for col in ordered_columns if col in sor_registry_display_df.columns]].copy()
+                    st.session_state["sor_registry_report_df"] = sor_registry_report_df
+                    st.session_state["sor_registry_ai_rows"] = []
+                    st.session_state["sor_registry_analysis_done"] = False
 
-                        @st.dialog("Uzasadnienie niezgodności AI")
-                        def show_ai_noncompliance_dialog(reasons: list[dict]) -> None:
-                            for item in reasons:
-                                st.markdown(f"### {item.get('zastosowany produkt', 'Produkt')}")
-                                st.markdown(item.get("uzasadnienie", "Brak uzasadnienia."))
-                                st.caption(f"Status: {item.get('status', 'unknown')}")
-                                st.divider()
-
-                        if st.button("Uruchom analizę AI", key="run_sor_ai_analysis"):
-                            ai_rows = []
-                            non_compliance_rows = []
-                            for _, row in sor_registry_report_df.iterrows():
-                                product_name = str(row.get("product_name") or "").strip()
-                                crop_name = str(row.get("uprawa") or "").strip()
-                                dose_value = row.get("dose")
-                                date_value = row.get("treatment_date")
-                                notes_value = ""
-                                if "notes" in treatments_df.columns:
-                                    matching_rows = treatments_df[
-                                        (treatments_df["field_id"].astype(str) == str(row.get("field_id")))
-                                        & (treatments_df["treatment_date"].astype(str) == str(date_value))
-                                    ]
-                                    if not matching_rows.empty:
-                                        notes_value = str(matching_rows.iloc[0].get("notes") or "")
-                                analysis = analyze_sor_row_with_gemini(
-                                    product_name=product_name,
-                                    crop_name=crop_name,
-                                    dose=dose_value,
-                                    application_date=date_value,
-                                    sor_notes=notes_value,
-                                )
-                                ai_row = {
-                                    "status": str(analysis.get("overall_status", "unknown")).strip(),
-                                    "uzasadnienie": str(analysis.get("summary", "Brak uzasadnienia.")),
-                                    "zastosowany produkt": product_name,
-                                }
-                                ai_rows.append(ai_row)
-                                if str(analysis.get("overall_status", "unknown")).lower() == "non_compliant":
-                                    non_compliance_rows.append(ai_row)
-
-                            ai_display_df = sor_registry_display_df.copy()
-                            ai_display_df["status AI"] = [item["status"] for item in ai_rows]
-                            ai_display_df["uzasadnienie AI"] = [item["uzasadnienie"] for item in ai_rows]
-
-                            def _style_sor_ai_rows(row):
-                                status = str(row["status AI"]).lower() if "status AI" in row else "unknown"
-                                if status == "non_compliant":
-                                    return ["background-color: #f8d7da; color: #111111" for _ in row]
-                                if status == "unknown":
-                                    return ["background-color: #fff3cd; color: #111111" for _ in row]
-                                return ["background-color: #d4edda; color: #111111" for _ in row]
-
-                            styled = ai_display_df.style.apply(_style_sor_ai_rows, axis=1)
-                            st.dataframe(styled, use_container_width=True, hide_index=True, hidden_columns=["status AI", "uzasadnienie AI"])
-
-                            if non_compliance_rows:
-                                show_ai_noncompliance_dialog(non_compliance_rows)
-                            else:
-                                st.success("Analiza AI: brak niezgodności w oparciu o etykietę, dawkę i okres zużycia zapasów.")
-                        else:
-                            st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
-
-                        sor_registry_export_df = sor_registry_report_df.copy()
-                        sor_registry_export_df = sor_registry_export_df.rename(columns={
+                sor_registry_report_df = st.session_state.get("sor_registry_report_df")
+                st.markdown("### Wyniki ewidencji ŚOR")
+                if sor_registry_report_df is None or sor_registry_report_df.empty:
+                    st.info("Brak zabiegów ŚOR dla wybranego gospodarstwa i sezonu.")
+                else:
+                    sor_registry_display_df = sor_registry_report_df.rename(
+                        columns={
                             "plot_name": "nr działki",
+                            "treatment_date": "data",
+                            "season": "sezon",
+                            "uprawa": "uprawa",
                             "product_category": "kategoria",
                             "product_name": "zastosowany produkt",
-                            "treatment_date": "data",
                             "dose": "dawka",
                             "area_ha": "powierzchnia",
-                            "uprawa": "uprawa",
-                            "season": "sezon",
-                        })
-                        sor_registry_export_df = sor_registry_export_df[[col for col in ordered_columns if col in sor_registry_export_df.columns]].copy()
-                        st.download_button(
-                            "Eksportuj ewidencję ŚOR do XLSX",
-                            data=to_excel_bytes(sor_registry_export_df),
-                            file_name="ewidencja_sor.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="download_sor_registry_report",
-                        )
+                        }
+                    )
+                    ordered_columns = ["nr działki", "kategoria", "zastosowany produkt", "data", "dawka", "powierzchnia", "uprawa", "sezon"]
+                    sor_registry_display_df = sor_registry_display_df[[col for col in ordered_columns if col in sor_registry_display_df.columns]].copy()
+
+                    @st.dialog("Uzasadnienie niezgodności AI")
+                    def show_ai_noncompliance_dialog(reasons: list[dict]) -> None:
+                        for item in reasons:
+                            st.markdown(f"### {item.get('zastosowany produkt', 'Produkt')}")
+                            st.markdown(item.get("uzasadnienie", "Brak uzasadnienia."))
+                            st.caption(f"Status: {item.get('status', 'unknown')}")
+                            st.divider()
+
+                    if st.button("Uruchom analizę AI", key="run_sor_ai_analysis"):
+                        ai_rows = []
+                        non_compliance_rows = []
+                        for _, row in sor_registry_report_df.iterrows():
+                            product_name = str(row.get("product_name") or "").strip()
+                            crop_name = str(row.get("uprawa") or "").strip()
+                            dose_value = row.get("dose")
+                            date_value = row.get("treatment_date")
+                            notes_value = ""
+                            if "notes" in treatments_df.columns:
+                                matching_rows = treatments_df[
+                                    (treatments_df["field_id"].astype(str) == str(row.get("field_id")))
+                                    & (treatments_df["treatment_date"].astype(str) == str(date_value))
+                                ]
+                                if not matching_rows.empty:
+                                    notes_value = str(matching_rows.iloc[0].get("notes") or "")
+                            analysis = analyze_sor_row_with_gemini(
+                                product_name=product_name,
+                                crop_name=crop_name,
+                                dose=dose_value,
+                                application_date=date_value,
+                                sor_notes=notes_value,
+                            )
+                            ai_row = {
+                                "status": str(analysis.get("overall_status", "unknown")).strip(),
+                                "uzasadnienie": str(analysis.get("summary", "Brak uzasadnienia.")),
+                                "zastosowany produkt": product_name,
+                            }
+                            ai_rows.append(ai_row)
+                            if str(analysis.get("overall_status", "unknown")).lower() == "non_compliant":
+                                non_compliance_rows.append(ai_row)
+
+                        st.session_state["sor_registry_ai_rows"] = ai_rows
+                        st.session_state["sor_registry_analysis_done"] = True
+                        st.success("Analiza AI zakończona.")
+
+                        if non_compliance_rows:
+                            show_ai_noncompliance_dialog(non_compliance_rows)
+
+                    ai_rows = st.session_state.get("sor_registry_ai_rows", [])
+                    if ai_rows:
+                        ai_display_df = sor_registry_display_df.copy()
+                        ai_display_df["status AI"] = [item["status"] for item in ai_rows]
+                        ai_display_df["uzasadnienie AI"] = [item["uzasadnienie"] for item in ai_rows]
+
+                        def _style_sor_ai_rows(row):
+                            status = str(row["status AI"]).lower() if "status AI" in row else "unknown"
+                            if status == "non_compliant":
+                                return ["background-color: #f8d7da; color: #111111" for _ in row]
+                            if status == "unknown":
+                                return ["background-color: #fff3cd; color: #111111" for _ in row]
+                            return ["background-color: #d4edda; color: #111111" for _ in row]
+
+                        styled = ai_display_df.style.apply(_style_sor_ai_rows, axis=1)
+                        st.dataframe(styled, use_container_width=True, hide_index=True, hidden_columns=["status AI", "uzasadnienie AI"])
+                    else:
+                        st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
+
+                    sor_registry_export_df = sor_registry_report_df.copy()
+                    sor_registry_export_df = sor_registry_export_df.rename(columns={
+                        "plot_name": "nr działki",
+                        "product_category": "kategoria",
+                        "product_name": "zastosowany produkt",
+                        "treatment_date": "data",
+                        "dose": "dawka",
+                        "area_ha": "powierzchnia",
+                        "uprawa": "uprawa",
+                        "season": "sezon",
+                    })
+                    sor_registry_export_df = sor_registry_export_df[[col for col in ordered_columns if col in sor_registry_export_df.columns]].copy()
+                    st.download_button(
+                        "Eksportuj ewidencję ŚOR do XLSX",
+                        data=to_excel_bytes(sor_registry_export_df),
+                        file_name="ewidencja_sor.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key="download_sor_registry_report",
+                    )
 
         elif st.session_state.report_section == "consumption":
             st.subheader("Zużycie")
