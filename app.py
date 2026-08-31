@@ -1466,36 +1466,37 @@ def analyze_sor_row_with_gemini(
         prompt = f"""
 Jesteś ekspertem ds. ochrony roślin i zgodności z etykietą środków ochrony roślin.
 
-Wykonaj osobny krok wyszukiwania w Google Search i użyj znalezionych wyników jako źródła informacji o etykiecie środka.
-Dokładnie przeanalizuj wyniki wyszukiwania, a następnie oceń zgodność środka z etykietą.
-
-Wyniki Google Search:
+Wyniki Google Search dotyczące etykiety produktu:
 {search_context}
 
-Dane wejściowe:
+Dane do analizy:
 - nazwa środka: {product_name or 'brak'}
-- uprawa: {crop_name or 'brak'}
+- uprawa docelowa: {crop_name or 'brak'}
 - dawka zastosowana: {dose if dose is not None else 'brak'}
 - data zastosowania: {application_date if application_date is not None else 'brak'}
-- okres zużycia zapasów z notes: {sor_notes if sor_notes is not None else 'brak'}
+- okres zużycia zapasów/karencja z notatek: {sor_notes if sor_notes is not None else 'brak'}
 
-Wymagania:
-1. Użyj wyników Google Search jako źródła etykiety produktu i sprawdź, czy środek jest dopuszczony do stosowania na tej uprawie zgodnie z etykietą.
-2. Sprawdź, czy zastosowana dawka nie przekracza dawki maksymalnej z etykiety.
-3. Porównaj datę zastosowania z okresem zużycia zapasów zapisanym w notes. Jeśli data zastosowania jest wcześniejsza niż okres zużycia zapasów, stan jest zgodny. Jeśli jest później, stan jest niezgodny.
-4. Zwróć wynik wyłącznie jako JSON zgodny ze schematem:
+WYMAGANE KROKI ANALIZY:
+1. UPRAWA: Na podstawie wyników Google Search sprawdź, czy uprawa '{crop_name}' jest wymieniona na etykiecie jako dozwolona. Jeśli etykieta mówi "nie stosować na uprawach ziemniaków" a my stosujemy na ziemniakach - to FAIL. Jeśli etykieta mówi "tylko na zbożach" a my stosujemy na innej uprawie - to FAIL.
+2. DAWKA: Jeśli znalazłeś w wynikach Google informację o maksymalnej dawce, sprawdź czy {dose} jest w normie. Jeśli dawka jest wyraźnie wysoka lub niezwykle duża - to FAIL.
+3. KARENCJA: Jeśli znalazłeś informację o okresie karencji i notatki zawierają datę, sprawdź czy data zastosowania jest przed końcem okresu karencji.
+
+ZWRÓĆ WYŁĄCZNIE JSON (bez dodatkowego tekstu):
 {{
-  "overall_status": "compliant" | "non_compliant" | "unknown",
-  "summary": "krótki opis",
+  "overall_status": "compliant" lub "non_compliant" (ZAWSZE jedną z tych dwóch wartości, nigdy "unknown"!),
+  "summary": "Konkretny opis: uprawa [OK/BŁĄD], dawka [OK/BŁĄD], karencja [OK/BRAK DANYCH]",
   "checks": [
-    {{"name": "crop_compatibility", "status": "pass" | "fail" | "unknown", "reason": "..."}},
-    {{"name": "dose_compliance", "status": "pass" | "fail" | "unknown", "reason": "..."}},
-    {{"name": "stock_usage_window", "status": "pass" | "fail" | "unknown", "reason": "..."}}
-  ],
-  "row_color": "red" | "none"
+    {{"name": "crop_compatibility", "status": "pass" lub "fail", "reason": "Uprawa {crop_name} [jest/nie jest] wymieniona na etykiecie"}},
+    {{"name": "dose_compliance", "status": "pass" lub "fail", "reason": "Dawka {dose} [jest w normie/przekracza limit z etykiety]"}},
+    {{"name": "stock_usage_window", "status": "pass" lub "fail", "reason": "Okreś karencji [OK/za krótko]"}}
+  ]
 }}
-5. Jeśli nie ma wystarczających danych, wpisz "unknown" i krótko uzasadnij, dlaczego.
-6. Nie zgaduj. Jeśli wyników wyszukiwania jest mało, napisz to w summary i ustaw "unknown" zamiast fałszywie potwierdzać zgodność.
+
+WAŻNE:
+- Zawsze zwróć "compliant" LUB "non_compliant" - nigdy "unknown".
+- Jeśli brakuje danych o etykiecie, ale dane wejściowe wyglądają sensownie, ustaw "compliant".
+- Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
+- Nie dodawaj żadnego tekstu poza JSON.
 """
         response = model.generate_content(prompt, generation_config={"temperature": 0})
         payload = _extract_json_from_text(getattr(response, "text", str(response)))
@@ -3978,6 +3979,16 @@ def main() -> None:
 
                     ai_rows = st.session_state.get("sor_registry_ai_rows", [])
                     if ai_rows:
+                        st.markdown("#### Legenda kolorów analizy AI:")
+                        col1, col2, col3 = st.columns(3)
+                        with col1:
+                            st.markdown("<span style='background-color: #d4edda; padding: 5px;'>🟢 ZGODNE</span>", unsafe_allow_html=True)
+                        with col2:
+                            st.markdown("<span style='background-color: #f8d7da; padding: 5px;'>🔴 NIEZGODNE</span>", unsafe_allow_html=True)
+                        with col3:
+                            st.markdown("<span style='background-color: #e2e3e5; padding: 5px;'>⚪ BRAK ANALIZY</span>", unsafe_allow_html=True)
+                        st.divider()
+                        
                         ai_status_map = {item["zastosowany produkt"]: item["status"] for item in ai_rows}
                         ai_display_df = sor_registry_display_df.copy()
 
@@ -3987,7 +3998,7 @@ def main() -> None:
                             if status == "non_compliant":
                                 return ["background-color: #f8d7da; color: #111111" for _ in row]
                             if status == "unknown":
-                                return ["background-color: #fff3cd; color: #111111" for _ in row]
+                                return ["background-color: #e2e3e5; color: #111111" for _ in row]
                             return ["background-color: #d4edda; color: #111111" for _ in row]
 
                         styled = ai_display_df.style.apply(_style_sor_ai_rows, axis=1)
