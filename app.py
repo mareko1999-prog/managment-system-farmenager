@@ -3978,12 +3978,12 @@ def main() -> None:
 
                     ai_rows = st.session_state.get("sor_registry_ai_rows", [])
                     if ai_rows:
+                        ai_status_map = {item["zastosowany produkt"]: item["status"] for item in ai_rows}
                         ai_display_df = sor_registry_display_df.copy()
-                        ai_display_df["status AI"] = [item["status"] for item in ai_rows]
-                        ai_display_df["uzasadnienie AI"] = [item["uzasadnienie"] for item in ai_rows]
 
                         def _style_sor_ai_rows(row):
-                            status = str(row["status AI"]).lower() if "status AI" in row else "unknown"
+                            product = str(row.get("zastosowany produkt", "")).strip()
+                            status = str(ai_status_map.get(product, "unknown")).lower()
                             if status == "non_compliant":
                                 return ["background-color: #f8d7da; color: #111111" for _ in row]
                             if status == "unknown":
@@ -3991,7 +3991,7 @@ def main() -> None:
                             return ["background-color: #d4edda; color: #111111" for _ in row]
 
                         styled = ai_display_df.style.apply(_style_sor_ai_rows, axis=1)
-                        st.dataframe(styled, use_container_width=True, hide_index=True, hidden_columns=["status AI", "uzasadnienie AI"])
+                        st.dataframe(styled, use_container_width=True, hide_index=True)
                     else:
                         st.dataframe(sor_registry_display_df, use_container_width=True, hide_index=True)
 
