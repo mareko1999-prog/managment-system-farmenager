@@ -1451,7 +1451,12 @@ def analyze_sor_row_with_gemini(
 
     try:
         logs.append(f"[INFO] Konfiguracja Gemini z modelem: {model_name}")
+        logs.append(f"[INFO] Klucz API długość: {len(api_key)}, typ: {type(api_key).__name__}")
+        logs.append(f"[INFO] Klucz zaczyna się od: {api_key[:10] if api_key else 'BRAK'}")
+        
+        # Jawne przekazanie klucza AQ. do klienta genai
         client = genai.Client(api_key=api_key)
+        logs.append("[INFO] Klient Gemini zainicjalizowany")
         
         search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
         logs.append(f"[INFO] Wyszukiwanie: {search_query}")
@@ -1502,11 +1507,14 @@ WAŻNE:
 - Nie dodawaj żadnego tekstu poza JSON.
 """
         logs.append("[INFO] Wysyłanie promptu do Gemini...")
+        logs.append(f"[INFO] Parametry: model={model_name}, prompt_length={len(prompt)}")
+        
         response = client.models.generate_content(
             model=model_name,
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.0)
         )
+        logs.append("[INFO] Odpowiedź otrzymana z Gemini")
         response_text = getattr(response, "text", str(response))
         logs.append(f"[INFO] Odpowiedź Gemini (pierwsze 200 znaków): {response_text[:200]}")
         
@@ -1527,7 +1535,16 @@ WAŻNE:
         logs.append(f"[INFO] Final status: {payload.get('overall_status')}")
         return payload
     except Exception as exc:
-        logs.append(f"[ERROR] Wyjątek: {str(exc)}")
+        error_str = str(exc)
+        logs.append(f"[ERROR] Wyjątek: {error_str}")
+        
+        # Specjalne obsłużenie błędów tokenu AQ.
+        if "API_KEY_INVALID" in error_str or "401" in error_str or "400" in error_str:
+            logs.append("[ERROR] Problem z kluczem API - sprawdź czy:")
+            logs.append("  1. Klucz jest w pełni skopiowany bez spacji")
+            logs.append("  2. Klucz jest formatem AQ.")
+            logs.append("  3. Upłynęło 5-15 minut na propagację nowego klucza")
+        
         import traceback
         logs.append(f"[TRACEBACK] {traceback.format_exc()}")
         return {
