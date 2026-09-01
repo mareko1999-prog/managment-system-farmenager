@@ -1333,32 +1333,6 @@ def sor_product_exists(name: str) -> bool:
     return not df[df["name"].astype(str).str.lower() == name.lower()].empty
 
 
-def _get_openai_config() -> tuple[str, str]:
-    api_key = ""
-    model_name = "gpt-4o-mini"  # Wartość domyślna
-    
-    # Najpierw sprawdzamy Streamlit Secrets (bezpiecznie z .get())
-    api_key = str(st.secrets.get("OPENAI_API_KEY", "") or "").strip()
-    if not api_key:
-        api_key = str(os.environ.get("OPENAI_API_KEY", "") or "").strip()
-    
-    # Czyszczenie z złego formatu (nawiasy, słowniki, itp.)
-    if api_key.startswith('{'):
-        # Próba wyciągnięcia wartości z {'OPENAI_API_KEY': 'sk-...'}
-        import re
-        match = re.search(r"'sk-[^']*'|\"sk-[^\"]*\"", api_key)
-        if match:
-            api_key = match.group(0).strip("'\"")
-    
-    model_name = str(st.secrets.get("OPENAI_MODEL", "") or "").strip()
-    if not model_name:
-        model_name = str(os.environ.get("OPENAI_MODEL", "") or "").strip()
-    if not model_name:
-        model_name = "gpt-4o-mini"
-        
-    return api_key, model_name
-
-
 def _get_groq_config() -> str:
     """Pobiera klucz API Groq z secrets lub zmiennych środowiska."""
     api_key = ""
@@ -1446,205 +1420,6 @@ def _extract_json_from_text(raw_text: str) -> dict:
                 pass
 
     return {"overall_status": "unknown", "summary": text[:500], "checks": []}
-
-
-def analyze_sor_row_with_openai(
-    product_name: str,
-    crop_name: str,
-    dose: Any,
-    application_date: Any,
-    sor_notes: Any,
-) -> dict:
-    """Analizuje wiersz SOR, próbuje OpenAI najpierw, potem Groq jako fallback."""
-    logs = []
-    api_key, model_name = _get_openai_config()
-    
-    # Jeśli OpenAI jest dostępny, spróbuj go najpierw
-    if api_key:
-        result = _analyze_with_openai_impl(product_name, crop_name, dose, application_date, sor_notes, logs)
-        if result.get("overall_status") != "unknown":
-            return result
-        # Jeśli OpenAI zwrócił błąd, spróbuj Groq
-        logs.append("[INFO] OpenAI zawodło, próbuję Groq jako fallback...")
-    
-    # Fallback na Groq
-    groq_api_key = _get_groq_config()
-    if groq_api_key:
-        logs.append("[INFO] Konfiguracja Groq jako fallback")
-        result = analyze_sor_row_with_groq(product_name, crop_name, dose, application_date, sor_notes)
-        # Merge debug logs
-        if "debug_logs" in result:
-            result["debug_logs"] = logs + result["debug_logs"]
-        else:
-            result["debug_logs"] = logs
-        return result
-    
-    # Jeśli ani OpenAI ani Groq nie są dostępne
-    logs.append("[ERROR] Brak klucza OPENAI_API_KEY i GROQ_API_KEY")
-    return {
-        "overall_status": "unknown",
-        "summary": "Brak kluczy API dla OpenAI ani Groq. Skonfiguruj przynajmniej jeden z nich w Streamlit Secrets.",
-        "checks": [],
-        "debug_logs": logs,
-    }
-
-
-def _analyze_with_openai_impl(
-    product_name: str,
-    crop_name: str,
-    dose: Any,
-    application_date: Any,
-    sor_notes: Any,
-    logs: list,
-) -> dict:
-    """Implementacja analizy OpenAI (wydzielona dla fallback logic)."""
-
-def _analyze_with_openai_impl(
-    product_name: str,
-    crop_name: str,
-    dose: Any,
-    application_date: Any,
-    sor_notes: Any,
-    logs: list,
-) -> dict:
-    """Implementacja analizy OpenAI (wydzielona dla fallback logic)."""
-    api_key, model_name = _get_openai_config()
-
-    try:
-        from openai import OpenAI
-    except ImportError:
-        logs.append("[ERROR] Brak biblioteki openai")
-        return {
-            "overall_status": "unknown",
-            "summary": "Brak biblioteki openai. Zainstaluj zależność: pip install openai",
-            "checks": [],
-            "debug_logs": logs,
-        }
-
-    try:
-        logs.append(f"[INFO] Konfiguracja OpenAI z modelem: {model_name}")
-        logs.append(f"[INFO] Klucz API długość: {len(api_key)}, typ: {type(api_key).__name__}")
-        logs.append(f"[INFO] Klucz zaczyna się od: {api_key[:10] if api_key else 'BRAK'}")
-        
-        # Walidacja formatu klucza
-        if api_key.startswith('{') or api_key.startswith('['):
-            logs.append("[ERROR] Klucz ma format TOML/JSON zamiast czystej wartości!")
-            logs.append("[ERROR] Upewnij się, że w Streamlit Secrets wklejono TYLKO wartość bez nawiasów")
-            logs.append("[ERROR] Prawidłowo: OPENAI_API_KEY = \"sk-proj-xxxx\"")
-            logs.append(f"[ERROR] Otrzymano: {api_key[:100]}")
-            return {
-                "overall_status": "unknown",
-                "summary": "Błąd konfiguracji klucza API - format TOML/JSON zamiast czystej wartości. Sprawdź Streamlit Secrets.",
-                "checks": [],
-                "debug_logs": logs,
-            }
-        
-        if not api_key.startswith('sk-'):
-            logs.append("[ERROR] Klucz nie zaczyna się od sk- ! Może to być zły klucz.")
-            logs.append(f"[ERROR] Otrzymano prefiks: {api_key[:20]}")
-        
-        # Inicjalizacja klienta OpenAI
-        client = OpenAI(api_key=api_key)
-        logs.append("[INFO] Klient OpenAI zainicjalizowany")
-        
-        search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
-        logs.append(f"[INFO] Wyszukiwanie: {search_query}")
-        
-        search_results = _google_search(search_query, max_results=5)
-        logs.append(f"[INFO] Wyniki Google Search: {len(search_results)} rezultatów")
-        if search_results:
-            for i, result in enumerate(search_results[:2], 1):
-                logs.append(f"[SEARCH {i}] {result[:100]}...")
-        else:
-            logs.append("[WARN] Brak wyników wyszukiwania")
-        
-        search_context = "\n".join(search_results) if search_results else "Brak wyników wyszukiwania Google dla etykiety produktu."
-
-        prompt = f"""
-Jesteś ekspertem ds. ochrony roślin i zgodności z etykietą środków ochrony roślin.
-
-Wyniki Google Search dotyczące etykiety produktu:
-{search_context}
-
-Dane do analizy:
-- nazwa środka: {product_name or 'brak'}
-- uprawa docelowa: {crop_name or 'brak'}
-- dawka zastosowana: {dose if dose is not None else 'brak'}
-- data zastosowania: {application_date if application_date is not None else 'brak'}
-- okres zużycia zapasów/karencja z notatek: {sor_notes if sor_notes is not None else 'brak'}
-
-WYMAGANE KROKI ANALIZY:
-1. UPRAWA: Na podstawie wyników Google Search sprawdź, czy uprawa '{crop_name}' jest wymieniona na etykiecie jako dozwolona. Jeśli etykieta mówi "nie stosować na uprawach ziemniaków" a my stosujemy na ziemniakach - to FAIL. Jeśli etykieta mówi "tylko na zbożach" a my stosujemy na innej uprawie - to FAIL.
-2. DAWKA: Jeśli znalazłeś w wynikach Google informację o maksymalnej dawce, sprawdź czy {dose} jest w normie. Jeśli dawka jest wyraźnie wysoka lub niezwykle duża - to FAIL.
-3. KARENCJA: Jeśli znalazłeś informację o okresie karencji i notatki zawierają datę, sprawdź czy data zastosowania jest przed końcem okresu karencji.
-
-ZWRÓĆ WYŁĄCZNIE JSON (bez dodatkowego tekstu):
-{{
-  "overall_status": "compliant" lub "non_compliant" (ZAWSZE jedną z tych dwóch wartości, nigdy "unknown"!),
-  "summary": "Konkretny opis: uprawa [OK/BŁĄD], dawka [OK/BŁĄD], karencja [OK/BRAK DANYCH]",
-  "checks": [
-    {{"name": "crop_compatibility", "status": "pass" lub "fail", "reason": "Uprawa {crop_name} [jest/nie jest] wymieniona na etykiecie"}},
-    {{"name": "dose_compliance", "status": "pass" lub "fail", "reason": "Dawka {dose} [jest w normie/przekracza limit z etykiety]"}},
-    {{"name": "stock_usage_window", "status": "pass" lub "fail", "reason": "Okreś karencji [OK/za krótko]"}}
-  ]
-}}
-
-WAŻNE:
-- Zawsze zwróć "compliant" LUB "non_compliant" - nigdy "unknown".
-- Jeśli brakuje danych o etykiecie, ale dane wejściowe wyglądają sensownie, ustaw "compliant".
-- Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
-- Nie dodawaj żadnego tekstu poza JSON.
-"""
-        logs.append("[INFO] Wysyłanie promptu do OpenAI...")
-        logs.append(f"[INFO] Parametry: model={model_name}, prompt_length={len(prompt)}")
-        
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "Jesteś ekspertem ds. ochrony roślin. Odpowiadaj TYLKO w formacie JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.0
-        )
-        logs.append("[INFO] Odpowiedź otrzymana z OpenAI")
-        response_text = response.choices[0].message.content
-        logs.append(f"[INFO] Odpowiedź OpenAI (pierwsze 200 znaków): {response_text[:200]}")
-        
-        payload = _extract_json_from_text(response_text)
-        logs.append(f"[INFO] Parsowany JSON: {payload}")
-        
-        if not isinstance(payload, dict):
-            logs.append("[ERROR] Payload nie jest słownikiem")
-            payload = {"overall_status": "unknown", "summary": "Błąd parsowania odpowiedzi modelu.", "checks": [], "debug_logs": logs}
-        
-        payload["debug_logs"] = logs
-        
-        if "checks" not in payload or not isinstance(payload["checks"], list):
-            payload["checks"] = []
-        if "summary" not in payload or not payload["summary"]:
-            payload["summary"] = "Analiza AI zakończona."
-        
-        logs.append(f"[INFO] Final status: {payload.get('overall_status')}")
-        return payload
-    except Exception as exc:
-        error_str = str(exc)
-        logs.append(f"[ERROR] Wyjątek: {error_str}")
-        
-        # Specjalne obsłużenie błędów klucza
-        if "invalid_api_key" in error_str or "401" in error_str:
-            logs.append("[ERROR] Problem z kluczem API - sprawdź czy:")
-            logs.append("  1. Klucz jest w pełni skopiowany bez spacji")
-            logs.append("  2. Klucz zaczyna się od sk-")
-            logs.append("  3. Klucz ma wystarczającą ilość środków")
-        
-        import traceback
-        logs.append(f"[TRACEBACK] {traceback.format_exc()}")
-        return {
-            "overall_status": "unknown",
-            "summary": f"Błąd połączenia z OpenAI: {exc}",
-            "checks": [],
-            "debug_logs": logs,
-        }
 
 
 def _get_groq_model_name() -> str:
@@ -1796,7 +1571,14 @@ WAŻNE:
                     raise
         
         if response is None:
-            raise last_error or RuntimeError("Groq nie zwrócił odpowiedzi dla żadnego modelu.")
+            logs.append("[ERROR] Żaden model Groq nie jest dostępny dla tego konta.")
+            logs.append("[ERROR] W Groq Console sprawdź listę aktywnych modeli i ustaw GROQ_MODEL na dokładną nazwę z listy.")
+            return {
+                "overall_status": "unknown",
+                "summary": "Żaden model Groq nie jest dostępny dla tego konta. Sprawdź listę modeli w Groq Console i ustaw GROQ_MODEL na dokładną nazwę z listy.",
+                "checks": [],
+                "debug_logs": logs,
+            }
 
         response_text = response.choices[0].message.content
         logs.append(f"[INFO] Odpowiedź Groq (pierwsze 200 znaków): {response_text[:200]}")
@@ -4265,7 +4047,7 @@ def main() -> None:
                                 ]
                                 if not matching_rows.empty:
                                     notes_value = str(matching_rows.iloc[0].get("notes") or "")
-                            analysis = analyze_sor_row_with_openai(
+                            analysis = analyze_sor_row_with_groq(
                                 product_name=product_name,
                                 crop_name=crop_name,
                                 dose=dose_value,
