@@ -1423,13 +1423,8 @@ def _extract_json_from_text(raw_text: str) -> dict:
 
 
 def _get_groq_model_name() -> str:
-    """Zwraca model Groq. Ustawiamy bezpieczną, szeroko dostępną wartość domyślną."""
-    model_name = str(st.secrets.get("GROQ_MODEL", "") or "").strip()
-    if not model_name:
-        model_name = str(os.environ.get("GROQ_MODEL", "") or "").strip()
-    if not model_name:
-        model_name = "llama-3.1-8b-instant"
-    return model_name
+    """Zwraca stały model AI używany przez aplikację."""
+    return "openai/gpt-oss-120b"
 
 
 def _get_groq_model_candidates() -> list[str]:
