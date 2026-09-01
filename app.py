@@ -1361,9 +1361,22 @@ def _get_openai_config() -> tuple[str, str]:
 
 def _get_groq_config() -> str:
     """Pobiera klucz API Groq z secrets lub zmiennych środowiska."""
-    api_key = str(st.secrets.get("GROQ_API_KEY", "") or "").strip()
+    api_key = ""
+    # Streamlit Cloud secrets mogą zawierać wartość jako TOML/JSON lub pustą wartość,
+    # więc najpierw próbujemy odczytać z secrets, potem z environment.
+    try:
+        api_key = str(st.secrets.get("GROQ_API_KEY", "") or "").strip()
+    except Exception:
+        api_key = ""
     if not api_key:
         api_key = str(os.environ.get("GROQ_API_KEY", "") or "").strip()
+
+    # Obsługa złego formatu: {'GROQ_API_KEY': 'gsk_xxx'} lub inne niepoprawne wklejenie
+    if api_key.startswith('{'):
+        match = re.search(r"'gsk_[^']*'|\"gsk_[^\"]*\"", api_key)
+        if match:
+            api_key = match.group(0).strip("'\"")
+
     return api_key
 
 
@@ -1667,6 +1680,17 @@ def analyze_sor_row_with_groq(
     try:
         logs.append("[INFO] Używam Groq API (darmowe, Mixtral 8x7B)")
         logs.append(f"[INFO] Klucz API długość: {len(api_key)}")
+        logs.append(f"[INFO] Groq key prefix: {api_key[:12] if api_key else 'BRAK'}")
+        if api_key.startswith('{') or api_key.startswith('['):
+            logs.append("[ERROR] Klucz Groq ma zły format - prawdopodobnie wklejono cały TOML/JSON zamiast samej wartości.")
+            return {
+                "overall_status": "unknown",
+                "summary": "Błąd konfiguracji klucza Groq. W Streamlit Cloud wklej tylko samą wartość, np. GROQ_API_KEY = \"gsk_xxx\".",
+                "checks": [],
+                "debug_logs": logs,
+            }
+        if not api_key.startswith('gsk_'):
+            logs.append("[WARN] Klucz Groq nie zaczyna się od gsk_ - sprawdź, czy to właściwy klucz Groq.")
         
         client = Groq(api_key=api_key)
         logs.append("[INFO] Klient Groq zainicjalizowany")
