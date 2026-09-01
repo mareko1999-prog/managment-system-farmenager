@@ -1355,25 +1355,34 @@ def _get_groq_config() -> str:
 
 
 def _get_google_search_config() -> tuple[str, str]:
+    """Pobiera dane do wbudowanego wyszukiwania web dla etykiet, bez ekspozycji w UI."""
     api_key = ""
     engine_id = ""
-    
-    api_key = str(st.secrets.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
+
+    try:
+        api_key = str(st.secrets.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
+    except Exception:
+        api_key = ""
     if not api_key:
         api_key = str(os.environ.get("GOOGLE_SEARCH_API_KEY", "") or "").strip()
-    
-    engine_id = str(st.secrets.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
+
+    try:
+        engine_id = str(st.secrets.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
+    except Exception:
+        engine_id = ""
     if not engine_id:
         engine_id = str(os.environ.get("GOOGLE_SEARCH_ENGINE_ID", "") or "").strip()
-        
+
     return api_key, engine_id
 
 
-def _google_search(query: str, max_results: int = 5) -> list[str]:
+def _web_search_label(query: str, max_results: int = 5) -> list[str]:
+    """Wyszukuje etykiety środka w internecie i zwraca krótki kontekst do modelu."""
     api_key, engine_id = _get_google_search_config()
     if not api_key or not engine_id:
         return []
 
+    payload = None
     params = parse.urlencode({
         "key": api_key,
         "cx": engine_id,
@@ -1387,16 +1396,15 @@ def _google_search(query: str, max_results: int = 5) -> list[str]:
     except Exception:
         return []
 
-    items = payload.get("items") or []
-    search_results = []
-    for item in items:
+    results = []
+    for item in payload.get("items") or []:
         title = str(item.get("title") or "").strip()
         snippet = str(item.get("snippet") or "").strip()
         link = str(item.get("link") or "").strip()
-        if title or snippet or link:
-            parts = [part for part in [title, snippet, link] if part]
-            search_results.append(" | ".join(parts))
-    return search_results
+        parts = [part for part in [title, snippet, link] if part]
+        if parts:
+            results.append(" | ".join(parts))
+    return results
 
 
 def _extract_json_from_text(raw_text: str) -> dict:
@@ -1474,7 +1482,6 @@ def analyze_sor_row_with_groq(
         }
 
     try:
-        logs.append("[INFO] Używam Groq API (darmowe, Mixtral 8x7B)")
         logs.append(f"[INFO] Klucz API długość: {len(api_key)}")
         logs.append(f"[INFO] Groq key prefix: {api_key[:12] if api_key else 'BRAK'}")
         if api_key.startswith('{') or api_key.startswith('['):
@@ -1487,57 +1494,55 @@ def analyze_sor_row_with_groq(
             }
         if not api_key.startswith('gsk_'):
             logs.append("[WARN] Klucz Groq nie zaczyna się od gsk_ - sprawdź, czy to właściwy klucz Groq.")
-        
+
         client = Groq(api_key=api_key)
         logs.append("[INFO] Klient Groq zainicjalizowany")
-        
-        search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
-        logs.append(f"[INFO] Wyszukiwanie: {search_query}")
-        
-        search_results = _google_search(search_query, max_results=5)
-        logs.append(f"[INFO] Wyniki Google Search: {len(search_results)} rezultatów")
+
+        search_query = f'"{product_name}" {crop_name} etykieta uprawa dawka karencja'
+        search_results = _web_search_label(search_query, max_results=5)
+        logs.append(f"[INFO] Wyniki web search: {len(search_results)}")
         if search_results:
-            for i, result in enumerate(search_results[:2], 1):
-                logs.append(f"[SEARCH {i}] {result[:100]}...")
+            for i, result in enumerate(search_results[:3], 1):
+                logs.append(f"[WEB {i}] {result[:180]}...")
         else:
-            logs.append("[WARN] Brak wyników wyszukiwania")
-        
-        search_context = "\n".join(search_results) if search_results else "Brak wyników wyszukiwania Google dla etykiety produktu."
+            logs.append("[WARN] Brak wyników web search; model musi zwrócić unknown, gdy brak dowodów.")
+
+        web_context = "\n".join(search_results) if search_results else "Brak wiarygodnych wyników web search dla tej etykiety."
 
         prompt = f"""
-Jesteś ekspertem ds. ochrony roślin i zgodności z etykietą środków ochrony roślin.
+Jesteś ekspertem ds. ochrony roślin i zgodności etykiet środków ochrony roślin.
 
-Wyniki Google Search dotyczące etykiety produktu:
-{search_context}
+Masz wykonać analizę zgodności na podstawie wyników wyszukiwania web. To nie jest ogólna wiedza — musisz bazować na dostarczonych wynikach i nie zgadywać.
 
-Dane do analizy:
+Wyniki wyszukiwania web:
+{web_context}
+
+Dane wejściowe:
 - nazwa środka: {product_name or 'brak'}
 - uprawa docelowa: {crop_name or 'brak'}
 - dawka zastosowana: {dose if dose is not None else 'brak'}
 - data zastosowania: {application_date if application_date is not None else 'brak'}
-- okres zużycia zapasów/karencja z notatek: {sor_notes if sor_notes is not None else 'brak'}
+- okres zużycia zapasów / karencja z notatek: {sor_notes if sor_notes is not None else 'brak'}
 
-WYMAGANE KROKI ANALIZY:
-1. UPRAWA: Na podstawie wyników Google Search sprawdź, czy uprawa '{crop_name}' jest wymieniona na etykiecie jako dozwolona. Jeśli etykieta mówi "nie stosować na uprawach ziemniaków" a my stosujemy na ziemniakach - to FAIL. Jeśli etykieta mówi "tylko na zbożach" a my stosujemy na innej uprawie - to FAIL.
-2. DAWKA: Jeśli znalazłeś w wynikach Google informację o maksymalnej dawce, sprawdź czy {dose} jest w normie. Jeśli dawka jest wyraźnie wysoka lub niezwykle duża - to FAIL.
-3. KARENCJA: Jeśli znalazłeś informację o okresie karencji i notatki zawierają datę, sprawdź czy data zastosowania jest przed końcem okresu karencji.
+Instrukcje:
+1. Używaj tylko wyników web jako dowodów. Jeśli nie ma potwierdzenia z etykiety lub wiarygodnego źródła producenta, nie dopisuj domysłów.
+2. Jeśli wyniki web są niepełne, niejasne lub sprzeczne, ustaw overall_status na "unknown" i dokładnie napisz, że brak potwierdzenia.
+3. Jeśli etykieta wyraźnie dopuszcza daną uprawę, dawkę i karencję, ustaw overall_status na "compliant".
+4. Jeśli etykieta lub źródło producenta wyraźnie pokazuje niezgodność z uprawą, dawką lub karencją, ustaw overall_status na "non_compliant".
+5. Nigdy nie zgaduj. Brak dowodów = "unknown".
 
-ZWRÓĆ WYŁĄCZNIE JSON (bez dodatkowego tekstu):
+Wymagany format odpowiedzi JSON (TYLKO JSON, bez komentarza):
 {{
-  "overall_status": "compliant" lub "non_compliant" (ZAWSZE jedną z tych dwóch wartości, nigdy "unknown"!),
-  "summary": "Konkretny opis: uprawa [OK/BŁĄD], dawka [OK/BŁĄD], karencja [OK/BRAK DANYCH]",
+  "overall_status": "compliant" | "non_compliant" | "unknown",
+  "summary": "krótki opis z podaniem, czy decyzja jest potwierdzona, niepotwierdzona, czy sprzeczna z etykietą",
   "checks": [
-    {{"name": "crop_compatibility", "status": "pass" lub "fail", "reason": "Uprawa {crop_name} [jest/nie jest] wymieniona na etykiecie"}},
-    {{"name": "dose_compliance", "status": "pass" lub "fail", "reason": "Dawka {dose} [jest w normie/przekracza limit z etykiety]"}},
-    {{"name": "stock_usage_window", "status": "pass" lub "fail", "reason": "Okreś karencji [OK/za krótko]"}}
+    {{"name": "crop_compatibility", "status": "pass" | "fail" | "unknown", "reason": "wyjaśnienie oparte na etykiecie lub brak dowodu"}},
+    {{"name": "dose_compliance", "status": "pass" | "fail" | "unknown", "reason": "wyjaśnienie oparte na etykiecie lub brak dowodu"}},
+    {{"name": "stock_usage_window", "status": "pass" | "fail" | "unknown", "reason": "wyjaśnienie oparte na karencji lub brak dowodu"}}
   ]
 }}
 
-WAŻNE:
-- Zawsze zwróć "compliant" LUB "non_compliant" - nigdy "unknown".
-- Jeśli brakuje danych o etykiecie, ale dane wejściowe wyglądają sensownie, ustaw "compliant".
-- Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
-- Nie dodawaj żadnego tekstu poza JSON.
+Zasada końcowa: jeśli nie ma wystarczających, zweryfikowalnych dowodów, output ma być "unknown".
 """
         model_candidates = _get_groq_model_candidates()
         logs.append("[INFO] Wysyłanie promptu do Groq...")
