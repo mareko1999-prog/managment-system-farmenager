@@ -1648,13 +1648,29 @@ WAŻNE:
 
 
 def _get_groq_model_name() -> str:
-    """Zwraca wspierany model Groq. Wartość domyślna musi być aktywna i wspierana."""
+    """Zwraca model Groq. Ustawiamy bezpieczną, szeroko dostępną wartość domyślną."""
     model_name = str(st.secrets.get("GROQ_MODEL", "") or "").strip()
     if not model_name:
         model_name = str(os.environ.get("GROQ_MODEL", "") or "").strip()
     if not model_name:
-        model_name = "llama-3.3-70b-versatile"
+        model_name = "llama-3.1-8b-instant"
     return model_name
+
+
+def _get_groq_model_candidates() -> list[str]:
+    """Lista modeli Groq do próby, w kolejności od najbardziej kompatybilnych."""
+    preferred = _get_groq_model_name().strip()
+    candidates = [preferred]
+    fallback_models = [
+        "llama-3.1-8b-instant",
+        "llama-3.3-70b-versatile",
+        "llama-3.1-70b-versatile",
+        "mixtral-8x7b-32768",
+    ]
+    for model in fallback_models:
+        if model not in candidates:
+            candidates.append(model)
+    return [m for m in candidates if m]
 
 
 def analyze_sor_row_with_groq(
@@ -1753,19 +1769,35 @@ WAŻNE:
 - Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
 - Nie dodawaj żadnego tekstu poza JSON.
 """
-        model_name = _get_groq_model_name()
+        model_candidates = _get_groq_model_candidates()
         logs.append("[INFO] Wysyłanie promptu do Groq...")
-        logs.append(f"[INFO] Parametry: model={model_name}, prompt_length={len(prompt)}")
+        logs.append(f"[INFO] Lista modeli do próby: {model_candidates}")
         
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "Jesteś ekspertem ds. ochrony roślin. Odpowiadaj TYLKO w formacie JSON."},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.0
-        )
-        logs.append("[INFO] Odpowiedź otrzymana z Groq")
+        response = None
+        last_error = None
+        for model_name in model_candidates:
+            try:
+                logs.append(f"[INFO] Próba modelu Groq: {model_name}")
+                response = client.chat.completions.create(
+                    model=model_name,
+                    messages=[
+                        {"role": "system", "content": "Jesteś ekspertem ds. ochrony roślin. Odpowiadaj TYLKO w formacie JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.0
+                )
+                logs.append(f"[INFO] Odpowiedź otrzymana z Groq przez model: {model_name}")
+                break
+            except Exception as model_exc:
+                last_error = model_exc
+                error_text = str(model_exc)
+                logs.append(f"[WARN] Model Groq {model_name} odrzucony: {error_text}")
+                if "model_not_found" not in error_text and "model_decommissioned" not in error_text and "not exist" not in error_text:
+                    raise
+        
+        if response is None:
+            raise last_error or RuntimeError("Groq nie zwrócił odpowiedzi dla żadnego modelu.")
+
         response_text = response.choices[0].message.content
         logs.append(f"[INFO] Odpowiedź Groq (pierwsze 200 znaków): {response_text[:200]}")
         
