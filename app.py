@@ -1382,7 +1382,6 @@ def _web_search_label(query: str, max_results: int = 5) -> list[str]:
     if not api_key or not engine_id:
         return []
 
-    payload = None
     params = parse.urlencode({
         "key": api_key,
         "cx": engine_id,
@@ -1393,7 +1392,19 @@ def _web_search_label(query: str, max_results: int = 5) -> list[str]:
     try:
         with request.urlopen(url, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except Exception:
+    except Exception as exc:
+        print(f"[ERROR] Google Search API exception: {exc}")
+        try:
+            import traceback
+            print(f"[TRACEBACK] {traceback.format_exc()}")
+        except Exception:
+            pass
+        return []
+
+    if "error" in payload:
+        error_payload = payload.get("error") or {}
+        error_message = error_payload.get("message") or str(error_payload)
+        print(f"[ERROR] Google Search API returned error: {error_message}")
         return []
 
     results = []
@@ -1501,6 +1512,8 @@ def analyze_sor_row_with_groq(
         search_query = f'"{product_name}" etykieta'
         api_key_search, engine_id = _get_google_search_config()
         logs.append(f"[INFO] Web search query: {search_query}")
+        logs.append(f"[INFO] Google Search API key present: {bool(api_key_search)}")
+        logs.append(f"[INFO] Google Search engine ID present: {bool(engine_id)}")
         if not api_key_search or not engine_id:
             logs.append("[WARN] Brak GOOGLE_SEARCH_API_KEY lub GOOGLE_SEARCH_ENGINE_ID — web search zostanie pominięty.")
         search_results = _web_search_label(search_query, max_results=5)
