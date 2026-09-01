@@ -1647,6 +1647,16 @@ WAŻNE:
         }
 
 
+def _get_groq_model_name() -> str:
+    """Zwraca wspierany model Groq. Wartość domyślna musi być aktywna i wspierana."""
+    model_name = str(st.secrets.get("GROQ_MODEL", "") or "").strip()
+    if not model_name:
+        model_name = str(os.environ.get("GROQ_MODEL", "") or "").strip()
+    if not model_name:
+        model_name = "llama-3.3-70b-versatile"
+    return model_name
+
+
 def analyze_sor_row_with_groq(
     product_name: str,
     crop_name: str,
@@ -1743,11 +1753,12 @@ WAŻNE:
 - Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
 - Nie dodawaj żadnego tekstu poza JSON.
 """
+        model_name = _get_groq_model_name()
         logs.append("[INFO] Wysyłanie promptu do Groq...")
-        logs.append(f"[INFO] Parametry: model=mixtral-8x7b-32768, prompt_length={len(prompt)}")
+        logs.append(f"[INFO] Parametry: model={model_name}, prompt_length={len(prompt)}")
         
         response = client.chat.completions.create(
-            model="mixtral-8x7b-32768",
+            model=model_name,
             messages=[
                 {"role": "system", "content": "Jesteś ekspertem ds. ochrony roślin. Odpowiadaj TYLKO w formacie JSON."},
                 {"role": "user", "content": prompt}
