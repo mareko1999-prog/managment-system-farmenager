@@ -1498,7 +1498,7 @@ def analyze_sor_row_with_groq(
         client = Groq(api_key=api_key)
         logs.append("[INFO] Klient Groq zainicjalizowany")
 
-        search_query = f'"{product_name}" {crop_name} etykieta uprawa dawka karencja'
+        search_query = f'"{product_name}" etykieta'
         api_key_search, engine_id = _get_google_search_config()
         logs.append(f"[INFO] Web search query: {search_query}")
         if not api_key_search or not engine_id:
