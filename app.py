@@ -1359,6 +1359,14 @@ def _get_openai_config() -> tuple[str, str]:
     return api_key, model_name
 
 
+def _get_groq_config() -> str:
+    """Pobiera klucz API Groq z secrets lub zmiennych środowiska."""
+    api_key = str(st.secrets.get("GROQ_API_KEY", "") or "").strip()
+    if not api_key:
+        api_key = str(os.environ.get("GROQ_API_KEY", "") or "").strip()
+    return api_key
+
+
 def _get_google_search_config() -> tuple[str, str]:
     api_key = ""
     engine_id = ""
@@ -1434,16 +1442,60 @@ def analyze_sor_row_with_openai(
     application_date: Any,
     sor_notes: Any,
 ) -> dict:
+    """Analizuje wiersz SOR, próbuje OpenAI najpierw, potem Groq jako fallback."""
     logs = []
     api_key, model_name = _get_openai_config()
-    if not api_key:
-        logs.append("[ERROR] Brak klucza OPENAI_API_KEY")
-        return {
-            "overall_status": "unknown",
-            "summary": "Brak klucza OPENAI_API_KEY w secrets lub środowisku.",
-            "checks": [],
-            "debug_logs": logs,
-        }
+    
+    # Jeśli OpenAI jest dostępny, spróbuj go najpierw
+    if api_key:
+        result = _analyze_with_openai_impl(product_name, crop_name, dose, application_date, sor_notes, logs)
+        if result.get("overall_status") != "unknown":
+            return result
+        # Jeśli OpenAI zwrócił błąd, spróbuj Groq
+        logs.append("[INFO] OpenAI zawodło, próbuję Groq jako fallback...")
+    
+    # Fallback na Groq
+    groq_api_key = _get_groq_config()
+    if groq_api_key:
+        logs.append("[INFO] Konfiguracja Groq jako fallback")
+        result = analyze_sor_row_with_groq(product_name, crop_name, dose, application_date, sor_notes)
+        # Merge debug logs
+        if "debug_logs" in result:
+            result["debug_logs"] = logs + result["debug_logs"]
+        else:
+            result["debug_logs"] = logs
+        return result
+    
+    # Jeśli ani OpenAI ani Groq nie są dostępne
+    logs.append("[ERROR] Brak klucza OPENAI_API_KEY i GROQ_API_KEY")
+    return {
+        "overall_status": "unknown",
+        "summary": "Brak kluczy API dla OpenAI ani Groq. Skonfiguruj przynajmniej jeden z nich w Streamlit Secrets.",
+        "checks": [],
+        "debug_logs": logs,
+    }
+
+
+def _analyze_with_openai_impl(
+    product_name: str,
+    crop_name: str,
+    dose: Any,
+    application_date: Any,
+    sor_notes: Any,
+    logs: list,
+) -> dict:
+    """Implementacja analizy OpenAI (wydzielona dla fallback logic)."""
+
+def _analyze_with_openai_impl(
+    product_name: str,
+    crop_name: str,
+    dose: Any,
+    application_date: Any,
+    sor_notes: Any,
+    logs: list,
+) -> dict:
+    """Implementacja analizy OpenAI (wydzielona dla fallback logic)."""
+    api_key, model_name = _get_openai_config()
 
     try:
         from openai import OpenAI
@@ -1577,6 +1629,136 @@ WAŻNE:
         return {
             "overall_status": "unknown",
             "summary": f"Błąd połączenia z OpenAI: {exc}",
+            "checks": [],
+            "debug_logs": logs,
+        }
+
+
+def analyze_sor_row_with_groq(
+    product_name: str,
+    crop_name: str,
+    dose: Any,
+    application_date: Any,
+    sor_notes: Any,
+) -> dict:
+    """Analizuje wiersz SOR za pomocą Groq (darmowe API)."""
+    logs = []
+    api_key = _get_groq_config()
+    if not api_key:
+        logs.append("[ERROR] Brak klucza GROQ_API_KEY")
+        return {
+            "overall_status": "unknown",
+            "summary": "Brak klucza GROQ_API_KEY w secrets lub środowisku.",
+            "checks": [],
+            "debug_logs": logs,
+        }
+
+    try:
+        from groq import Groq
+    except ImportError:
+        logs.append("[ERROR] Brak biblioteki groq")
+        return {
+            "overall_status": "unknown",
+            "summary": "Brak biblioteki groq. Zainstaluj zależność: pip install groq",
+            "checks": [],
+            "debug_logs": logs,
+        }
+
+    try:
+        logs.append("[INFO] Używam Groq API (darmowe, Mixtral 8x7B)")
+        logs.append(f"[INFO] Klucz API długość: {len(api_key)}")
+        
+        client = Groq(api_key=api_key)
+        logs.append("[INFO] Klient Groq zainicjalizowany")
+        
+        search_query = f'"{product_name}" etykieta stosowanie uprawa {crop_name} dawka'
+        logs.append(f"[INFO] Wyszukiwanie: {search_query}")
+        
+        search_results = _google_search(search_query, max_results=5)
+        logs.append(f"[INFO] Wyniki Google Search: {len(search_results)} rezultatów")
+        if search_results:
+            for i, result in enumerate(search_results[:2], 1):
+                logs.append(f"[SEARCH {i}] {result[:100]}...")
+        else:
+            logs.append("[WARN] Brak wyników wyszukiwania")
+        
+        search_context = "\n".join(search_results) if search_results else "Brak wyników wyszukiwania Google dla etykiety produktu."
+
+        prompt = f"""
+Jesteś ekspertem ds. ochrony roślin i zgodności z etykietą środków ochrony roślin.
+
+Wyniki Google Search dotyczące etykiety produktu:
+{search_context}
+
+Dane do analizy:
+- nazwa środka: {product_name or 'brak'}
+- uprawa docelowa: {crop_name or 'brak'}
+- dawka zastosowana: {dose if dose is not None else 'brak'}
+- data zastosowania: {application_date if application_date is not None else 'brak'}
+- okres zużycia zapasów/karencja z notatek: {sor_notes if sor_notes is not None else 'brak'}
+
+WYMAGANE KROKI ANALIZY:
+1. UPRAWA: Na podstawie wyników Google Search sprawdź, czy uprawa '{crop_name}' jest wymieniona na etykiecie jako dozwolona. Jeśli etykieta mówi "nie stosować na uprawach ziemniaków" a my stosujemy na ziemniakach - to FAIL. Jeśli etykieta mówi "tylko na zbożach" a my stosujemy na innej uprawie - to FAIL.
+2. DAWKA: Jeśli znalazłeś w wynikach Google informację o maksymalnej dawce, sprawdź czy {dose} jest w normie. Jeśli dawka jest wyraźnie wysoka lub niezwykle duża - to FAIL.
+3. KARENCJA: Jeśli znalazłeś informację o okresie karencji i notatki zawierają datę, sprawdź czy data zastosowania jest przed końcem okresu karencji.
+
+ZWRÓĆ WYŁĄCZNIE JSON (bez dodatkowego tekstu):
+{{
+  "overall_status": "compliant" lub "non_compliant" (ZAWSZE jedną z tych dwóch wartości, nigdy "unknown"!),
+  "summary": "Konkretny opis: uprawa [OK/BŁĄD], dawka [OK/BŁĄD], karencja [OK/BRAK DANYCH]",
+  "checks": [
+    {{"name": "crop_compatibility", "status": "pass" lub "fail", "reason": "Uprawa {crop_name} [jest/nie jest] wymieniona na etykiecie"}},
+    {{"name": "dose_compliance", "status": "pass" lub "fail", "reason": "Dawka {dose} [jest w normie/przekracza limit z etykiety]"}},
+    {{"name": "stock_usage_window", "status": "pass" lub "fail", "reason": "Okreś karencji [OK/za krótko]"}}
+  ]
+}}
+
+WAŻNE:
+- Zawsze zwróć "compliant" LUB "non_compliant" - nigdy "unknown".
+- Jeśli brakuje danych o etykiecie, ale dane wejściowe wyglądają sensownie, ustaw "compliant".
+- Jeśli dane są wyraźnie błędne (np. uprawa nie pasuje, dawka zbyt wysoka), ustaw "non_compliant".
+- Nie dodawaj żadnego tekstu poza JSON.
+"""
+        logs.append("[INFO] Wysyłanie promptu do Groq...")
+        logs.append(f"[INFO] Parametry: model=mixtral-8x7b-32768, prompt_length={len(prompt)}")
+        
+        response = client.chat.completions.create(
+            model="mixtral-8x7b-32768",
+            messages=[
+                {"role": "system", "content": "Jesteś ekspertem ds. ochrony roślin. Odpowiadaj TYLKO w formacie JSON."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.0
+        )
+        logs.append("[INFO] Odpowiedź otrzymana z Groq")
+        response_text = response.choices[0].message.content
+        logs.append(f"[INFO] Odpowiedź Groq (pierwsze 200 znaków): {response_text[:200]}")
+        
+        payload = _extract_json_from_text(response_text)
+        logs.append(f"[INFO] Parsowany JSON: {payload}")
+        
+        if not isinstance(payload, dict):
+            logs.append("[ERROR] Payload nie jest słownikiem")
+            payload = {"overall_status": "unknown", "summary": "Błąd parsowania odpowiedzi modelu.", "checks": [], "debug_logs": logs}
+        
+        payload["debug_logs"] = logs
+        
+        if "checks" not in payload or not isinstance(payload["checks"], list):
+            payload["checks"] = []
+        if "summary" not in payload or not payload["summary"]:
+            payload["summary"] = "Analiza AI zakończona."
+        
+        logs.append(f"[INFO] Final status: {payload.get('overall_status')}")
+        return payload
+    except Exception as exc:
+        error_str = str(exc)
+        logs.append(f"[ERROR] Wyjątek: {error_str}")
+        
+        import traceback
+        logs.append(f"[TRACEBACK] {traceback.format_exc()}")
+        return {
+            "overall_status": "unknown",
+            "summary": f"Błąd połączenia z Groq: {exc}",
             "checks": [],
             "debug_logs": logs,
         }
