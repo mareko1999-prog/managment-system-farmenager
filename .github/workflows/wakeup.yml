@@ -2,8 +2,15 @@ name: Wake Streamlit App (Browser)
 
 on:
   schedule:
-    - cron: "0 */10 * * *"
+    - cron: "*/10 * * * *"
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wake-streamlit-app
+  cancel-in-progress: true
 
 jobs:
   wake-up:
@@ -22,7 +29,7 @@ jobs:
           pip install playwright
           playwright install --with-deps chromium
 
-      - name: Visit app with headless browser
+      - name: Visit app and keep Streamlit backend active
         env:
           APP_URL: https://farmenager.streamlit.app/
         run: |
@@ -34,8 +41,10 @@ jobs:
           app_url = os.environ["APP_URL"]
 
           for attempt in range(1, 4):
+              browser = None
               try:
                   print(f"Attempt {attempt}: opening {app_url}")
+
                   with sync_playwright() as p:
                       browser = p.chromium.launch(
                           headless=True,
@@ -46,26 +55,90 @@ jobs:
                           ],
                       )
 
-                      page = browser.new_page()
+                      context = browser.new_context(
+                          viewport={"width": 1280, "height": 720},
+                          user_agent="Mozilla/5.0 (X11; Linux x86_64) "
+                                     "AppleWebKit/537.36 Chrome/124 Safari/537.36",
+                      )
+                      page = context.new_page()
                       page.set_default_timeout(60000)
 
-                      response = page.goto(app_url, wait_until="domcontentloaded", timeout=60000)
-                      if response is not None:
-                          print(f"HTTP status: {response.status}")
+                      websocket_connected = {"value": False}
 
-                      # Streamlit wznawia połączenie WebSocket niemal natychmiast po załadowaniu strony,
-                      # więc czekamy krótko, ale nie zakładamy, że to wystarczy bez walidacji.
-                      time.sleep(10)
+                      def on_websocket(ws):
+                          websocket_connected["value"] = True
+                          print(f"WebSocket opened: {ws.url}")
+
+                      page.on("websocket", on_websocket)
+
+                      response = page.goto(
+                          app_url,
+                          wait_until="domcontentloaded",
+                          timeout=60000,
+                      )
+                      status = response.status if response is not None else None
+                      print(f"HTTP status: {status}")
+
+                      deadline = time.monotonic() + 90
+
+                      while time.monotonic() < deadline:
+                          if websocket_connected["value"]:
+                              break
+                          page.wait_for_timeout(1000)
+
+                      page.wait_for_timeout(30000)
+
+                      body_text = page.locator("body").inner_text(timeout=10000)
+                      title = page.title()
 
                       print(f"Loaded URL: {page.url}")
-                      print(f"Title: {page.title()}")
-                      browser.close()
+                      print(f"Title: {title}")
+                      print(f"WebSocket connected: {websocket_connected['value']}")
 
-                  print("Wake-up succeeded.")
-                  break
+                      sleeping_markers = (
+                          "app is sleeping",
+                          "please wake",
+                          "your app is in sleep mode",
+                          "this app has gone to sleep",
+                          "sleeping",
+                      )
+
+                      lower_body = body_text.lower()
+                      is_sleeping = any(
+                          marker in lower_body
+                          for marker in sleeping_markers
+                      )
+
+                      if is_sleeping:
+                          raise RuntimeError(
+                              "Streamlit Community Cloud is showing a sleeping state"
+                          )
+
+                      if status is not None and status >= 400:
+                          raise RuntimeError(
+                              f"Unexpected HTTP status: {status}"
+                          )
+
+                      if not websocket_connected["value"]:
+                          raise RuntimeError(
+                              "Streamlit WebSocket never connected"
+                          )
+
+                      print(
+                          "Wake-up succeeded: "
+                          "Streamlit backend connection established."
+                      )
+                      break
+
               except Exception as exc:
                   print(f"Attempt {attempt} failed: {exc}")
+
                   if attempt == 3:
                       raise
+
                   time.sleep(15)
+
+              finally:
+                  if browser is not None:
+                      browser.close()
           PY
