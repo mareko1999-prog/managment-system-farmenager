@@ -41,94 +41,103 @@ jobs:
           app_url = os.environ["APP_URL"]
 
           for attempt in range(1, 4):
-              browser = None
               try:
                   print(f"Attempt {attempt}: opening {app_url}")
 
                   with sync_playwright() as p:
-                      browser = p.chromium.launch(
-                          headless=True,
-                          args=[
-                              "--no-sandbox",
-                              "--disable-setuid-sandbox",
-                              "--disable-dev-shm-usage",
-                          ],
-                      )
+                      browser = None
 
-                      context = browser.new_context(
-                          viewport={"width": 1280, "height": 720},
-                          user_agent="Mozilla/5.0 (X11; Linux x86_64) "
-                                     "AppleWebKit/537.36 Chrome/124 Safari/537.36",
-                      )
-                      page = context.new_page()
-                      page.set_default_timeout(60000)
-
-                      websocket_connected = {"value": False}
-
-                      def on_websocket(ws):
-                          websocket_connected["value"] = True
-                          print(f"WebSocket opened: {ws.url}")
-
-                      page.on("websocket", on_websocket)
-
-                      response = page.goto(
-                          app_url,
-                          wait_until="domcontentloaded",
-                          timeout=60000,
-                      )
-                      status = response.status if response is not None else None
-                      print(f"HTTP status: {status}")
-
-                      deadline = time.monotonic() + 90
-
-                      while time.monotonic() < deadline:
-                          if websocket_connected["value"]:
-                              break
-                          page.wait_for_timeout(1000)
-
-                      page.wait_for_timeout(30000)
-
-                      body_text = page.locator("body").inner_text(timeout=10000)
-                      title = page.title()
-
-                      print(f"Loaded URL: {page.url}")
-                      print(f"Title: {title}")
-                      print(f"WebSocket connected: {websocket_connected['value']}")
-
-                      sleeping_markers = (
-                          "app is sleeping",
-                          "please wake",
-                          "your app is in sleep mode",
-                          "this app has gone to sleep",
-                          "sleeping",
-                      )
-
-                      lower_body = body_text.lower()
-                      is_sleeping = any(
-                          marker in lower_body
-                          for marker in sleeping_markers
-                      )
-
-                      if is_sleeping:
-                          raise RuntimeError(
-                              "Streamlit Community Cloud is showing a sleeping state"
+                      try:
+                          browser = p.chromium.launch(
+                              headless=True,
+                              args=[
+                                  "--no-sandbox",
+                                  "--disable-setuid-sandbox",
+                                  "--disable-dev-shm-usage",
+                              ],
                           )
 
-                      if status is not None and status >= 400:
-                          raise RuntimeError(
-                              f"Unexpected HTTP status: {status}"
+                          context = browser.new_context(
+                              viewport={"width": 1280, "height": 720},
+                              user_agent=(
+                                  "Mozilla/5.0 (X11; Linux x86_64) "
+                                  "AppleWebKit/537.36 Chrome/124 Safari/537.36"
+                              ),
+                          )
+                          page = context.new_page()
+                          page.set_default_timeout(60000)
+
+                          websocket_connected = {"value": False}
+
+                          def on_websocket(ws):
+                              websocket_connected["value"] = True
+                              print(f"WebSocket opened: {ws.url}")
+
+                          page.on("websocket", on_websocket)
+
+                          response = page.goto(
+                              app_url,
+                              wait_until="domcontentloaded",
+                              timeout=60000,
+                          )
+                          status = response.status if response is not None else None
+                          print(f"HTTP status: {status}")
+
+                          deadline = time.monotonic() + 90
+
+                          while time.monotonic() < deadline:
+                              if websocket_connected["value"]:
+                                  break
+                              page.wait_for_timeout(1000)
+
+                          page.wait_for_timeout(30000)
+
+                          body_text = page.locator("body").inner_text(timeout=10000)
+                          title = page.title()
+
+                          print(f"Loaded URL: {page.url}")
+                          print(f"Title: {title}")
+                          print(f"WebSocket connected: {websocket_connected['value']}")
+
+                          sleeping_markers = (
+                              "app is sleeping",
+                              "please wake",
+                              "your app is in sleep mode",
+                              "this app has gone to sleep",
+                              "sleeping",
                           )
 
-                      if not websocket_connected["value"]:
-                          raise RuntimeError(
-                              "Streamlit WebSocket never connected"
+                          lower_body = body_text.lower()
+                          is_sleeping = any(
+                              marker in lower_body
+                              for marker in sleeping_markers
                           )
 
-                      print(
-                          "Wake-up succeeded: "
-                          "Streamlit backend connection established."
-                      )
-                      break
+                          if is_sleeping:
+                              raise RuntimeError(
+                                  "Streamlit Community Cloud is showing a sleeping state"
+                              )
+
+                          if status is not None and status >= 400:
+                              raise RuntimeError(
+                                  f"Unexpected HTTP status: {status}"
+                              )
+
+                          if not websocket_connected["value"]:
+                              raise RuntimeError(
+                                  "Streamlit WebSocket never connected"
+                              )
+
+                          print(
+                              "Wake-up succeeded: "
+                              "Streamlit backend connection established."
+                          )
+
+                      finally:
+                          if browser is not None:
+                              browser.close()
+
+                  break
 
               except Exception as exc:
                   print(f"Attempt {attempt} failed: {exc}")
@@ -137,8 +146,4 @@ jobs:
                       raise
 
                   time.sleep(15)
-
-              finally:
-                  if browser is not None:
-                      browser.close()
           PY
